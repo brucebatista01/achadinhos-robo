@@ -8,6 +8,11 @@ ENV PYTHONUNBUFFERED=1 \
     HOST=0.0.0.0 \
     PORT=8000
 
+# Fonte com acentos para o selo de avaliação. A imagem "slim" não traz
+# nenhuma fonte, e a reserva do Pillow não tem "ç" nem "õ" (o selo saía
+# "avalia□□es").
+RUN apt-get update     && apt-get install -y --no-install-recommends fonts-dejavu-core     && rm -rf /var/lib/apt/lists/*
+
 # Roda com um usuário comum (id 1000), não como root: se alguém achar uma
 # falha no app, não ganha controle total do container.
 RUN useradd -m -u 1000 user

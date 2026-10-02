@@ -12,10 +12,14 @@ o mesmo input gera sempre a mesma saída, o que facilita testar e ajustar.
 
 from __future__ import annotations
 
+import logging
 import math
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+
+
+log = logging.getLogger("composicao")
 
 
 class CompositionError(Exception):
@@ -28,11 +32,13 @@ class CompositionService:
     _FONTES_NEGRITO = (
         "C:/Windows/Fonts/segoeuib.ttf",
         "C:/Windows/Fonts/arialbd.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Linux/VPS
         "DejaVuSans-Bold.ttf",
     )
     _FONTES_REGULAR = (
         "C:/Windows/Fonts/segoeui.ttf",
         "C:/Windows/Fonts/arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux/VPS
         "DejaVuSans.ttf",
     )
 
@@ -63,7 +69,9 @@ class CompositionService:
                 return ImageFont.truetype(caminho, tamanho)
             except OSError:
                 continue
-        # Último recurso: fonte embutida do Pillow (feia, mas não quebra).
+        # Último recurso: fonte embutida do Pillow. Ela NÃO tem acentos
+        # ("avaliações" vira "avalia□□es"), então avisamos alto no log.
+        log.warning("Nenhuma fonte com acentos encontrada; o selo pode sair com caracteres quebrados.")
         return ImageFont.load_default(size=tamanho)
 
     @staticmethod
