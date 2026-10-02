@@ -1,0 +1,9 @@
+# Um produto por linha, no formato:
+#   link | preco_por | preco_de | cupom
+# Só o link e o preco_por são obrigatórios. Linhas com # são ignoradas.
+#
+# Exemplos:
+# https://amzn.to/abc123 | 129,90 | 199,90
+# https://amzn.to/xyz789 | 59,90 | 89,90 | CUPOM10
+# https://www.amazon.com.br/dp/B0CNHBV6W5 | 129,90
+

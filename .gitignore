@@ -1,0 +1,19 @@
+# Ambiente e segredos
+venv/
+.venv/
+.env
+
+# Cache Python
+__pycache__/
+*.pyc
+
+# Saídas e arquivos de debug
+output/
+debug_*.html
+chrome_profile/
+
+# Scripts descartáveis e experimentos antigos (mantidos só localmente)
+_antigos/
+
+# Briefing pessoal do projeto (fica só no computador)
+CONTEXTO.md
