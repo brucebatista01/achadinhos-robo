@@ -17,3 +17,6 @@ _antigos/
 
 # Briefing pessoal do projeto (fica só no computador)
 CONTEXTO.md
+
+# Configuração local do editor
+.claude/
