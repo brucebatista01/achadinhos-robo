@@ -26,8 +26,13 @@ def main() -> None:
     porta = int(os.getenv("PORT", "8000"))
     token = obter_token()
 
-    endereco = "localhost" if host in ("127.0.0.1", "0.0.0.0") else host
-    logging.getLogger("web").info("Abra no navegador: http://%s:%d/p/%s/", endereco, porta, token)
+    log = logging.getLogger("web")
+    if host == "127.0.0.1":
+        log.info("Abra no navegador: http://localhost:%d/p/%s/", porta, token)
+    else:
+        # Na hospedagem, os logs podem ser vistos por outras pessoas da
+        # plataforma: nunca escrevemos o código secreto neles.
+        log.info("App no ar na porta %d. O link é /p/<APP_TOKEN>/.", porta)
 
     # log_level="warning": o uvicorn não precisa logar cada consulta de
     # progresso (a página consulta a cada segundo).

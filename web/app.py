@@ -232,7 +232,7 @@ def criar_app(token: str | None = None, fabrica: Fabrica | None = None) -> FastA
     @asynccontextmanager
     async def ciclo_de_vida(_app: FastAPI):
         fabrica.aquecer()
-        log.info("App pronto em: /p/%s/", token)
+        log.info("App pronto.")
         yield
         fabrica.encerrar()
 
