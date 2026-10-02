@@ -12,16 +12,30 @@ set -euo pipefail
 REPOSITORIO="https://github.com/brucebatista01/sistema-achadinhos.git"
 PASTA="/opt/achadinhos"
 
-echo "==> Instalando Docker, Git e firewall"
+echo "==> Instalando Docker, Git, firewall e proteções"
 apt-get update -qq
-apt-get install -y -qq docker.io docker-compose-v2 git ufw >/dev/null
-systemctl enable --now docker >/dev/null
+apt-get install -y -qq docker.io docker-compose-v2 git ufw fail2ban unattended-upgrades >/dev/null
+systemctl enable --now docker fail2ban >/dev/null
 
 echo "==> Liberando só SSH e web no firewall"
 ufw allow OpenSSH >/dev/null
 ufw allow 80/tcp >/dev/null
 ufw allow 443/tcp >/dev/null
 ufw --force enable >/dev/null
+
+# Atualizações de segurança do Ubuntu instaladas automaticamente.
+dpkg-reconfigure -f noninteractive unattended-upgrades >/dev/null
+
+# Login por SENHA desligado: só entra quem tem uma chave SSH cadastrada.
+# Só fazemos isso se já houver chave, para ninguém ficar trancado para fora.
+# O nome começa com 00 porque o SSH usa a PRIMEIRA configuração que encontra
+# (a da hospedagem costuma vir num arquivo 50-...).
+if [ -s /root/.ssh/authorized_keys ]; then
+  printf '%s\n' "PasswordAuthentication no" "KbdInteractiveAuthentication no" \
+    "PermitRootLogin prohibit-password" > /etc/ssh/sshd_config.d/00-achadinhos.conf
+  sshd -t && systemctl reload ssh
+  echo "==> Login por senha desligado (só chave SSH)"
+fi
 
 echo "==> Baixando o código"
 if [ -d "$PASTA/.git" ]; then
