@@ -308,6 +308,7 @@ function atualizarCartao(dados) {
 
   if (dados.estado === "pronto") {
     cartao.querySelector(".peca-imagem").src = dados.url_imagem;
+    cartao.querySelector(".sem-selo").hidden = !!dados.avaliacao;
     preencherPosts(cartao, dados.mensagens);
     const baixar = cartao.querySelector('[data-acao="baixar"]');
     baixar.href = dados.url_imagem;

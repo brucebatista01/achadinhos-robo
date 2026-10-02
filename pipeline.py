@@ -106,6 +106,9 @@ class Peca:
     nome_produto: str
     caminho_imagem: Path
     mensagens: dict[str, str]  # loja -> texto pronto para colar
+    # (nota, quantidade) usados no selo; None = produto sem avaliações na
+    # Amazon (anúncio novo), e a imagem sai sem selo.
+    avaliacao: tuple[float, int] | None = None
 
 
 def converter_preco(texto: str) -> float:
@@ -194,7 +197,7 @@ class Pipeline:
             (self._pasta_saida / f"{asin}_{oferta.loja}.txt").write_text(texto, encoding="utf-8")
             mensagens[oferta.loja] = texto
 
-        return Peca(asin, nome_produto, caminho_imagem, mensagens)
+        return Peca(asin, nome_produto, caminho_imagem, mensagens, avaliacao)
 
     def _link_da_oferta(self, oferta: Oferta, link_amazon: str, asin: str) -> str:
         """

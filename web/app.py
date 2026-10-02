@@ -90,6 +90,7 @@ class Trabalho:
     mensagens: dict[str, str] = field(default_factory=dict)
     imagem: Path | None = None
     codigo: str | None = None  # ASIN: nome dos arquivos de trabalho em output/
+    avaliacao: tuple[float, int] | None = None
     erro: str | None = None
 
     @property
@@ -111,6 +112,7 @@ class Trabalho:
             ],
             # O id na URL evita que o navegador mostre uma imagem antiga do cache.
             "url_imagem": f"api/pecas/{self.id}/imagem" if self.imagem else None,
+            "avaliacao": self.avaliacao,
             "erro": self.erro,
             "entrada": {
                 "link_amazon": self.produto.link_amazon,
@@ -242,6 +244,7 @@ class Fabrica:
         else:
             trabalho.nome_produto = peca.nome_produto
             trabalho.codigo = peca.asin
+            trabalho.avaliacao = peca.avaliacao
             trabalho.mensagens = peca.mensagens
             trabalho.imagem = copia
             trabalho.descricao = "Pronto"

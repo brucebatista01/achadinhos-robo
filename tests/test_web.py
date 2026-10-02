@@ -33,6 +33,7 @@ class PipelineFalso:
         # Fechado = o pipeline "trava" no meio, para testar peça em andamento.
         self.liberado = threading.Event()
         self.liberado.set()
+        self.avaliacao = (4.8, 100)
 
     def processar(self, produto, ao_avancar):
         self.produtos.append(produto)
@@ -45,7 +46,7 @@ class PipelineFalso:
         Image.new("RGB", (40, 50), "orange").save(imagem)
         (self._pasta / "B000TESTE_sem_fundo.png").write_bytes(b"x")
         mensagens = {o.loja: f"POST {o.loja.upper()}" for o in produto.ofertas}
-        return Peca("B000TESTE", "Lanterna Teste", imagem, mensagens)
+        return Peca("B000TESTE", "Lanterna Teste", imagem, mensagens, self.avaliacao)
 
 
 @pytest.fixture
@@ -302,3 +303,13 @@ def test_limite_do_historico_tambem_apaga_os_arquivos(montar, tmp_path, monkeypa
     assert ids == [segunda]
     # Só sobra a imagem da peça que ficou no histórico.
     assert [p.name for p in (tmp_path / "web").iterdir()] == [f"{segunda}.png"]
+
+
+def test_peca_informa_a_avaliacao_usada_no_selo(montar):
+    cliente, falso = montar()
+    dados = esperar_terminar(cliente, enviar(cliente, pedido()).json()["id"])
+    assert dados["avaliacao"] == [4.8, 100]
+
+    falso.avaliacao = None  # produto novo, sem avaliações na Amazon
+    dados = esperar_terminar(cliente, enviar(cliente, pedido()).json()["id"])
+    assert dados["avaliacao"] is None
