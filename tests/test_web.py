@@ -247,14 +247,14 @@ def test_excluir_apaga_a_peca_e_os_arquivos(montar, tmp_path):
     id_trabalho = enviar(cliente, pedido()).json()["id"]
     esperar_terminar(cliente, id_trabalho)
     assert arquivos_do_produto(tmp_path) == ["B000TESTE_final.png", "B000TESTE_sem_fundo.png"]
-    assert len(list((tmp_path / "web").iterdir())) == 1
+    assert len(list((tmp_path / "web").glob("*.png"))) == 1
 
     assert cliente.delete(f"{BASE}/api/pecas/{id_trabalho}").status_code == 204
 
     assert cliente.get(f"{BASE}/api/pecas").json() == []
     assert cliente.get(f"{BASE}/api/pecas/{id_trabalho}/imagem").status_code == 404
     assert arquivos_do_produto(tmp_path) == []
-    assert list((tmp_path / "web").iterdir()) == []
+    assert list((tmp_path / "web").glob("*.png")) == []
 
 
 def test_excluir_uma_versao_mantem_os_arquivos_da_outra(montar, tmp_path):
@@ -302,7 +302,7 @@ def test_limite_do_historico_tambem_apaga_os_arquivos(montar, tmp_path, monkeypa
     ids = [t["id"] for t in cliente.get(f"{BASE}/api/pecas").json()]
     assert ids == [segunda]
     # Só sobra a imagem da peça que ficou no histórico.
-    assert [p.name for p in (tmp_path / "web").iterdir()] == [f"{segunda}.png"]
+    assert [p.name for p in (tmp_path / "web").glob("*.png")] == [f"{segunda}.png"]
 
 
 def test_peca_informa_a_avaliacao_usada_no_selo(montar):
@@ -313,3 +313,54 @@ def test_peca_informa_a_avaliacao_usada_no_selo(montar):
     falso.avaliacao = None  # produto novo, sem avaliações na Amazon
     dados = esperar_terminar(cliente, enviar(cliente, pedido()).json()["id"])
     assert dados["avaliacao"] is None
+
+
+# ---------------------------------------------------------------------- #
+# Histórico salvo em disco
+# ---------------------------------------------------------------------- #
+
+def test_historico_sobrevive_a_um_reinicio(montar, tmp_path):
+    cliente, _ = montar()
+    corpo = pedido(amazon={"preco_por": "10"}, shopee={"link": "https://s.shopee.com.br/x", "preco_por": "9"})
+    id_trabalho = enviar(cliente, corpo).json()["id"]
+    antes = esperar_terminar(cliente, id_trabalho)
+
+    # "Reinicia": um app novo, lendo as mesmas pastas.
+    novo, _ = montar()
+    depois = novo.get(f"{BASE}/api/pecas/{id_trabalho}").json()
+    assert depois == antes
+    assert novo.get(f"{BASE}/api/pecas/{id_trabalho}/imagem").status_code == 200
+    # E dá para gerar outra versão dela, com os dados que vieram do disco.
+    assert novo.post(f"{BASE}/api/pecas/{id_trabalho}/refazer").status_code == 202
+
+
+def test_peca_interrompida_pelo_reinicio_vira_erro(montar):
+    cliente, falso = montar()
+    falso.liberado.clear()  # a peça fica "travada" no meio
+    id_trabalho = enviar(cliente, pedido()).json()["id"]
+
+    novo, _ = montar()
+    dados = novo.get(f"{BASE}/api/pecas/{id_trabalho}").json()
+    assert dados["estado"] == "erro"
+    assert "reinício" in dados["erro"]
+    falso.liberado.set()
+
+
+def test_historico_corrompido_nao_derruba_o_app(montar, tmp_path):
+    (tmp_path / "web").mkdir()
+    (tmp_path / "web" / "historico.json").write_text("{isto não é json", encoding="utf-8")
+
+    cliente, _ = montar()
+    assert cliente.get(f"{BASE}/api/pecas").json() == []
+    # O arquivo ruim é guardado ao lado, não apagado.
+    assert (tmp_path / "web" / "historico.corrompido.json").exists()
+
+
+def test_excluir_tambem_sai_do_historico_em_disco(montar):
+    cliente, _ = montar()
+    id_trabalho = enviar(cliente, pedido()).json()["id"]
+    esperar_terminar(cliente, id_trabalho)
+    cliente.delete(f"{BASE}/api/pecas/{id_trabalho}")
+
+    novo, _ = montar()
+    assert novo.get(f"{BASE}/api/pecas").json() == []

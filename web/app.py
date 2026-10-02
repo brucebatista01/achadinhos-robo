@@ -13,10 +13,13 @@ Decisões de arquitetura:
   o progresso a cada segundo (polling). Simples e funciona em qualquer rede.
 - Um único trabalhador em segundo plano: o modelo de recorte usa muita
   memória, então as peças entram numa fila e são feitas uma de cada vez.
+- O histórico é salvo em disco (historico.json) a cada mudança, para a lista
+  sobreviver a atualizações e reinícios do servidor.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import secrets
@@ -52,8 +55,10 @@ PASTA_ESTATICA = Path(__file__).parent / "static"
 # gerar o mesmo produto de novo sobrescreveria a imagem da peça anterior.
 PASTA_PECAS_WEB = PASTA_SAIDA / "web"
 
-# Quantas peças o histórico guarda na memória (as mais antigas saem).
+# Quantas peças o histórico guarda (as mais antigas saem, com os arquivos).
 LIMITE_HISTORICO = 50
+
+NOME_ARQUIVO_HISTORICO = "historico.json"
 
 
 # ---------------------------------------------------------------------- #
@@ -96,6 +101,54 @@ class Trabalho:
     @property
     def em_andamento(self) -> bool:
         return self.estado in ("fila", "processando")
+
+    def para_disco(self) -> dict:
+        """Tudo o que precisa para recriar a peça depois de um reinício."""
+        return {
+            "id": self.id,
+            "criado_em": self.criado_em,
+            "estado": self.estado,
+            "etapa": self.etapa,
+            "descricao": self.descricao,
+            "nome_produto": self.nome_produto,
+            "mensagens": self.mensagens,
+            "imagem": str(self.imagem) if self.imagem else None,
+            "codigo": self.codigo,
+            "avaliacao": self.avaliacao,
+            "erro": self.erro,
+            "produto": {
+                "link_amazon": self.produto.link_amazon,
+                "ofertas": [vars(oferta) for oferta in self.produto.ofertas],
+            },
+        }
+
+    @classmethod
+    def de_disco(cls, dados: dict) -> Trabalho:
+        produto = Produto(
+            link_amazon=dados["produto"]["link_amazon"],
+            ofertas=tuple(Oferta(**o) for o in dados["produto"]["ofertas"]),
+        )
+        trabalho = cls(
+            id=dados["id"],
+            produto=produto,
+            criado_em=dados["criado_em"],
+            estado=dados["estado"],
+            etapa=dados["etapa"],
+            descricao=dados["descricao"],
+            nome_produto=dados["nome_produto"],
+            mensagens=dados["mensagens"],
+            imagem=Path(dados["imagem"]) if dados["imagem"] else None,
+            codigo=dados["codigo"],
+            avaliacao=tuple(dados["avaliacao"]) if dados["avaliacao"] else None,
+            erro=dados["erro"],
+        )
+        if trabalho.em_andamento:
+            # O servidor caiu no meio desta peça: o trabalhador que a fazia
+            # não existe mais. Vira erro, e "Tentar de novo" refaz com os
+            # mesmos dados.
+            trabalho.estado = "erro"
+            trabalho.erro = "A geração foi interrompida por um reinício do servidor. Tente de novo."
+        return trabalho
 
     def para_json(self) -> dict:
         return {
@@ -144,7 +197,8 @@ class Fabrica:
         self._pipeline = None
         self._pasta_pecas = pasta_pecas
         self._pasta_saida = pasta_saida
-        self._trabalhos: dict[str, Trabalho] = {}
+        self._arquivo_historico = pasta_pecas / NOME_ARQUIVO_HISTORICO
+        self._trabalhos: dict[str, Trabalho] = self._carregar()
         self._trava = threading.Lock()
         # max_workers=1: uma peça por vez (ver docstring do módulo).
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="peca")
@@ -166,6 +220,7 @@ class Fabrica:
         with self._trava:
             self._trabalhos[trabalho.id] = trabalho
             self._limitar_historico()
+            self._salvar()
         self._executor.submit(self._executar, trabalho)
         return trabalho
 
@@ -190,7 +245,43 @@ class Fabrica:
                 raise TrabalhoEmAndamentoError
             del self._trabalhos[id_trabalho]
             self._apagar_arquivos(trabalho)
+            self._salvar()
         return True
+
+    # ------------------------------------------------------------------ #
+    # Histórico em disco
+    # ------------------------------------------------------------------ #
+
+    def _carregar(self) -> dict[str, Trabalho]:
+        """
+        Lê o histórico salvo. Arquivo ausente é normal (primeira vez);
+        arquivo corrompido não pode derrubar o app: começa com a lista vazia
+        e guarda o arquivo ruim ao lado, para não perder a informação.
+        """
+        if not self._arquivo_historico.exists():
+            return {}
+        try:
+            itens = json.loads(self._arquivo_historico.read_text(encoding="utf-8"))
+            trabalhos = [Trabalho.de_disco(item) for item in itens]
+        except (OSError, ValueError, KeyError, TypeError) as erro:
+            log.error("Histórico ilegível (%s); começando com a lista vazia.", erro)
+            self._arquivo_historico.replace(self._arquivo_historico.with_suffix(".corrompido.json"))
+            return {}
+        return {t.id: t for t in trabalhos}
+
+    def _salvar(self) -> None:
+        """
+        Grava o histórico inteiro. Chamar com a trava.
+
+        Escreve num arquivo temporário e só então troca pelo definitivo
+        (os.replace é atômico): se o servidor cair no meio da gravação, o
+        histórico anterior continua inteiro, em vez de um JSON pela metade.
+        """
+        self._pasta_pecas.mkdir(parents=True, exist_ok=True)
+        temporario = self._arquivo_historico.with_suffix(".tmp")
+        dados = [t.para_disco() for t in self._trabalhos.values()]
+        temporario.write_text(json.dumps(dados, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(temporario, self._arquivo_historico)
 
     def _apagar_arquivos(self, trabalho: Trabalho) -> None:
         """
@@ -249,6 +340,10 @@ class Fabrica:
             trabalho.imagem = copia
             trabalho.descricao = "Pronto"
             trabalho.estado = "pronto"
+        finally:
+            # Grava o resultado (pronta ou com erro) no histórico em disco.
+            with self._trava:
+                self._salvar()
 
 
 # ---------------------------------------------------------------------- #
@@ -410,8 +505,8 @@ def criar_app(token: str | None = None, fabrica: Fabrica | None = None) -> FastA
     @app.get("/p/{chave}/api/pecas/{id_trabalho}/imagem", dependencies=protegido)
     def imagem_peca(chave: str, id_trabalho: str):
         trabalho = trabalho_ou_404(id_trabalho)
-        if trabalho.imagem is None:
-            raise HTTPException(status_code=404, detail="A imagem ainda não está pronta.")
+        if trabalho.imagem is None or not trabalho.imagem.exists():
+            raise HTTPException(status_code=404, detail="A imagem não está disponível.")
         nome = f"achadinho-{trabalho.id}.png"
         return FileResponse(trabalho.imagem, media_type="image/png", filename=nome,
                             content_disposition_type="inline")
