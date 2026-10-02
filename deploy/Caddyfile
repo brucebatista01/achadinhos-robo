@@ -1,0 +1,6 @@
+# DOMINIO vem do .env. Sem domínio próprio, use o IP da VPS no formato
+# 203-0-113-10.sslip.io: o sslip.io aponta esse nome para o IP de graça.
+{$DOMINIO} {
+	encode gzip
+	reverse_proxy app:8000
+}

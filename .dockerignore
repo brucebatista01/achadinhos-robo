@@ -1,0 +1,10 @@
+# Arquivos que não entram na imagem Docker
+.venv/
+.env
+output/
+_antigos/
+tests/
+.git/
+.claude/
+__pycache__/
+CONTEXTO.md

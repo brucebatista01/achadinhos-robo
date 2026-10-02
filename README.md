@@ -13,7 +13,7 @@ canal (modo semiautomático).
 1. Abra o link do app no celular ou no computador.
 2. Cole o **link do produto** e preencha o **preço POR**. O **preço DE** e o
    **cupom** são opcionais.
-3. Toque em **Gerar peça** e acompanhe as etapas na tela (cerca de 1 minuto).
+3. Toque em **Gerar peça** e acompanhe as etapas na tela (cerca de 15 segundos).
    Enquanto isso, você já pode colar o próximo link: as peças entram na fila.
 4. Quando a peça ficar pronta:
    - **Copiar texto**, depois cole no canal;
@@ -42,7 +42,7 @@ pip install -r requirements.txt
 > Se o PowerShell reclamar de "execução de scripts desabilitada", rode
 > `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` e tente de novo.
 
-Na **primeira execução** o robô baixa um modelo de IA de ~1 GB para recortar
+Na **primeira execução** o robô baixa um modelo de IA (~170 MB) para recortar
 o fundo das fotos. Isso acontece uma vez só.
 
 ## Configurar as chaves (`.env`)
@@ -69,6 +69,22 @@ python servidor.py
 
 O terminal mostra o link (`http://localhost:8000/p/SEU_CODIGO/`). Deixe a
 janela aberta enquanto usa o app.
+
+## Colocar no ar numa VPS
+
+O app precisa de uma VPS **Ubuntu 22.04 ou 24.04** com pelo menos **2 GB de
+RAM** (4 GB deixa folga). No servidor, como root:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/brucebatista01/sistema-achadinhos/main/deploy/instalar_vps.sh
+bash instalar_vps.sh
+```
+
+Na primeira vez o script cria o `/opt/achadinhos/.env`. Preencha as chaves
+(`nano /opt/achadinhos/.env`) e rode o script de novo. Ele instala o Docker,
+liga o firewall, sobe o app com HTTPS automático e mostra o link.
+
+Para atualizar depois de mudanças no GitHub, é só rodar o script de novo.
 
 ## Alternativa: lote pelo terminal
 
@@ -109,6 +125,7 @@ Estrutura:
 pipeline.py        # núcleo: um produto -> uma peça (usado pelo app e pelo lote)
 main.py            # modo lote pelo terminal
 servidor.py        # liga o app web
+Dockerfile, docker-compose.yml, deploy/   # publicação na VPS (app + Caddy com HTTPS)
 web/app.py         # API (FastAPI): link secreto, fila de peças, progresso
 web/static/        # interface (HTML, CSS e JavaScript puros)
 services/          # um serviço por etapa (Amazon, imagem, visão, composição, mensagem)

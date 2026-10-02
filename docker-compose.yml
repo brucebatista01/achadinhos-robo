@@ -1,0 +1,33 @@
+# Sobe o app e o Caddy na VPS:  docker compose up -d --build
+#
+# O Caddy fica na frente do app e cuida do HTTPS sozinho (pede e renova o
+# certificado gratuito). Sem HTTPS, o navegador bloqueia "copiar imagem" e
+# "compartilhar", então ele não é opcional.
+
+services:
+  app:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./output:/home/user/app/output
+    # Não abre porta para a internet: só o Caddy fala com o app.
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMINIO: ${DOMINIO:?defina DOMINIO no .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_dados:/data
+    depends_on:
+      - app
+
+volumes:
+  caddy_dados:

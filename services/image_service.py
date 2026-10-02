@@ -14,6 +14,7 @@ import io
 import os
 from pathlib import Path
 
+import onnxruntime
 import requests
 from dotenv import load_dotenv
 from PIL import Image
@@ -32,6 +33,13 @@ class ImageService:
     # Modelo mais fotorrealista para os fundos ambientalizados.
     _PHOTOROOM_MODELO = "background-studio-beta-2025-03-17"
 
+    # Modelo de recorte. Medido em 01/10/2026 com 3 produtos reais:
+    #   bria-rmbg          ~8 GB de RAM, ~25 s por foto
+    #   isnet-general-use  ~1 GB de RAM,  ~2 s por foto, bordas quase iguais
+    # O isnet é o padrão porque cabe numa VPS barata. Numa máquina forte,
+    # dá para voltar ao bria com MODELO_RECORTE=bria-rmbg no .env.
+    _MODELO_RECORTE_PADRAO = "isnet-general-use"
+
     _HEADERS_PADRAO = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -45,10 +53,23 @@ class ImageService:
         self._pasta_saida = Path(pasta_saida)
         # Garante que a pasta de saída exista (idempotente).
         self._pasta_saida.mkdir(parents=True, exist_ok=True)
-        # Sessão do rembg (o modelo de ~1 GB carregado na memória).
-        # Criada só no primeiro uso e reaproveitada: sem isso, cada produto
-        # do lote recarregaria o modelo do disco (~20 s a mais por produto).
+        self._modelo_recorte = os.getenv("MODELO_RECORTE", self._MODELO_RECORTE_PADRAO)
+        # Sessão do rembg (o modelo carregado na memória). Criada só no
+        # primeiro uso e reaproveitada: sem isso, cada produto do lote
+        # recarregaria o modelo do disco.
         self._sessao_rembg = None
+
+    def preparar_modelo(self) -> None:
+        """
+        Carrega o modelo de recorte (e baixa, se for a primeira vez).
+        O Dockerfile chama isto no build para o modelo já vir na imagem.
+        """
+        if self._sessao_rembg is None:
+            opcoes = onnxruntime.SessionOptions()
+            # Sem o "arena" o onnxruntime devolve a memória depois de cada
+            # foto, em vez de guardar uma reserva grande: o uso fica estável.
+            opcoes.enable_cpu_mem_arena = False
+            self._sessao_rembg = new_session(self._modelo_recorte, sess_opts=opcoes)
 
     def baixar_imagem(self, url_imagem: str) -> bytes:
         """Baixa os bytes brutos de uma imagem a partir da URL."""
@@ -69,8 +90,7 @@ class ImageService:
         Pillow em modo RGBA (com canal de transparência).
         """
         try:
-            if self._sessao_rembg is None:
-                self._sessao_rembg = new_session()
+            self.preparar_modelo()
             resultado_bytes = remove(imagem_bytes, session=self._sessao_rembg)
             imagem = Image.open(io.BytesIO(resultado_bytes)).convert("RGBA")
         except Exception as erro:

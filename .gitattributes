@@ -1,0 +1,5 @@
+# Arquivos que rodam no Linux (VPS) precisam de quebra de linha LF.
+*.sh text eol=lf
+Caddyfile text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
