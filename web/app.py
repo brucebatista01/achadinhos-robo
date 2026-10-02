@@ -89,7 +89,12 @@ class Trabalho:
     nome_produto: str | None = None
     mensagens: dict[str, str] = field(default_factory=dict)
     imagem: Path | None = None
+    codigo: str | None = None  # ASIN: nome dos arquivos de trabalho em output/
     erro: str | None = None
+
+    @property
+    def em_andamento(self) -> bool:
+        return self.estado in ("fila", "processando")
 
     def para_json(self) -> dict:
         return {
@@ -117,16 +122,26 @@ class Trabalho:
         }
 
 
+class TrabalhoEmAndamentoError(Exception):
+    """Tentativa de excluir uma peça que ainda está sendo gerada."""
+
+
 class Fabrica:
     """
     Fila de trabalhos + o pipeline. Separada das rotas para poder ser
     testada (e trocada por uma versão falsa) sem subir servidor nenhum.
     """
 
-    def __init__(self, criar_pipeline=Pipeline, pasta_pecas: Path = PASTA_PECAS_WEB) -> None:
+    def __init__(
+        self,
+        criar_pipeline=Pipeline,
+        pasta_pecas: Path = PASTA_PECAS_WEB,
+        pasta_saida: Path = PASTA_SAIDA,
+    ) -> None:
         self._criar_pipeline = criar_pipeline
         self._pipeline = None
         self._pasta_pecas = pasta_pecas
+        self._pasta_saida = pasta_saida
         self._trabalhos: dict[str, Trabalho] = {}
         self._trava = threading.Lock()
         # max_workers=1: uma peça por vez (ver docstring do módulo).
@@ -159,13 +174,50 @@ class Fabrica:
         with self._trava:
             return sorted(self._trabalhos.values(), key=lambda t: t.criado_em, reverse=True)
 
+    def excluir(self, id_trabalho: str) -> bool:
+        """
+        Tira a peça do histórico e apaga os arquivos dela do disco.
+        Devolve False se a peça não existe. Peça em andamento não pode ser
+        excluída: o trabalhador ainda está escrevendo os arquivos dela.
+        """
+        with self._trava:
+            trabalho = self._trabalhos.get(id_trabalho)
+            if trabalho is None:
+                return False
+            if trabalho.em_andamento:
+                raise TrabalhoEmAndamentoError
+            del self._trabalhos[id_trabalho]
+            self._apagar_arquivos(trabalho)
+        return True
+
+    def _apagar_arquivos(self, trabalho: Trabalho) -> None:
+        """
+        Apaga a cópia da imagem desta peça e, se nenhuma outra peça do
+        histórico for do mesmo produto, os arquivos de trabalho dele
+        (recorte, imagem final e textos em output/). Chamar com a trava.
+        """
+        if trabalho.imagem is not None:
+            trabalho.imagem.unlink(missing_ok=True)
+        if trabalho.codigo is None:
+            return
+        if any(t.codigo == trabalho.codigo for t in self._trabalhos.values()):
+            return  # outra peça do mesmo produto ainda usa esses arquivos
+        for arquivo in self._pasta_saida.glob(f"{trabalho.codigo}_*"):
+            arquivo.unlink(missing_ok=True)
+
     def encerrar(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
 
     def _limitar_historico(self) -> None:
+        """
+        Passou do limite? Remove as peças prontas mais antigas, COM os
+        arquivos (antes elas saíam da lista mas ficavam ocupando o disco).
+        """
         excesso = len(self._trabalhos) - LIMITE_HISTORICO
-        for antigo in sorted(self._trabalhos.values(), key=lambda t: t.criado_em)[:max(excesso, 0)]:
+        terminados = [t for t in self._trabalhos.values() if not t.em_andamento]
+        for antigo in sorted(terminados, key=lambda t: t.criado_em)[:max(excesso, 0)]:
             del self._trabalhos[antigo.id]
+            self._apagar_arquivos(antigo)
 
     def _executar(self, trabalho: Trabalho) -> None:
         trabalho.estado = "processando"
@@ -189,6 +241,7 @@ class Fabrica:
             trabalho.erro = "Erro inesperado. Tente de novo; se repetir, avise o Bruce."
         else:
             trabalho.nome_produto = peca.nome_produto
+            trabalho.codigo = peca.asin
             trabalho.mensagens = peca.mensagens
             trabalho.imagem = copia
             trabalho.descricao = "Pronto"
@@ -331,6 +384,17 @@ def criar_app(token: str | None = None, fabrica: Fabrica | None = None) -> FastA
     def refazer_peca(chave: str, id_trabalho: str):
         # Gera outra versão com os mesmos dados que já estão no servidor.
         return fabrica.criar(trabalho_ou_404(id_trabalho).produto).para_json()
+
+    @app.delete("/p/{chave}/api/pecas/{id_trabalho}", dependencies=protegido,
+                status_code=204)
+    def excluir_peca(chave: str, id_trabalho: str):
+        try:
+            existia = fabrica.excluir(id_trabalho)
+        except TrabalhoEmAndamentoError as erro:
+            raise HTTPException(status_code=409,
+                                detail="Essa peça ainda está sendo gerada. Espere terminar.") from erro
+        if not existia:
+            raise HTTPException(status_code=404, detail="Peça não encontrada.")
 
     @app.get("/p/{chave}/api/pecas", dependencies=protegido)
     def listar_pecas(chave: str):

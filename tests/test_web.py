@@ -8,6 +8,7 @@ e tratamento de erros.
 
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -29,15 +30,20 @@ class PipelineFalso:
         self._pasta = pasta
         self._erro = erro
         self.produtos = []
+        # Fechado = o pipeline "trava" no meio, para testar peça em andamento.
+        self.liberado = threading.Event()
+        self.liberado.set()
 
     def processar(self, produto, ao_avancar):
         self.produtos.append(produto)
         for numero, descricao in enumerate(ETAPAS, 1):
             ao_avancar(numero, descricao)
+        self.liberado.wait(timeout=5)
         if self._erro:
             raise self._erro
         imagem = self._pasta / "B000TESTE_final.png"
         Image.new("RGB", (40, 50), "orange").save(imagem)
+        (self._pasta / "B000TESTE_sem_fundo.png").write_bytes(b"x")
         mensagens = {o.loja: f"POST {o.loja.upper()}" for o in produto.ofertas}
         return Peca("B000TESTE", "Lanterna Teste", imagem, mensagens)
 
@@ -49,7 +55,8 @@ def montar(tmp_path):
 
     def _montar(erro: Exception | None = None):
         falso = PipelineFalso(tmp_path, erro)
-        fabrica = Fabrica(criar_pipeline=lambda: falso, pasta_pecas=tmp_path / "web")
+        fabrica = Fabrica(criar_pipeline=lambda: falso, pasta_pecas=tmp_path / "web",
+                          pasta_saida=tmp_path)
         cliente = TestClient(criar_app(TOKEN, fabrica))
         cliente.__enter__()  # dispara o ciclo de vida (aquecer)
         clientes.append(cliente)
@@ -224,3 +231,74 @@ def test_peca_inexistente_e_404(montar):
     cliente, _ = montar()
     assert cliente.get(f"{BASE}/api/pecas/naoexiste").status_code == 404
     assert cliente.post(f"{BASE}/api/pecas/naoexiste/refazer").status_code == 404
+
+
+# ---------------------------------------------------------------------- #
+# Exclusão de peças
+# ---------------------------------------------------------------------- #
+
+def arquivos_do_produto(pasta):
+    return sorted(p.name for p in pasta.glob("B000TESTE_*"))
+
+
+def test_excluir_apaga_a_peca_e_os_arquivos(montar, tmp_path):
+    cliente, _ = montar()
+    id_trabalho = enviar(cliente, pedido()).json()["id"]
+    esperar_terminar(cliente, id_trabalho)
+    assert arquivos_do_produto(tmp_path) == ["B000TESTE_final.png", "B000TESTE_sem_fundo.png"]
+    assert len(list((tmp_path / "web").iterdir())) == 1
+
+    assert cliente.delete(f"{BASE}/api/pecas/{id_trabalho}").status_code == 204
+
+    assert cliente.get(f"{BASE}/api/pecas").json() == []
+    assert cliente.get(f"{BASE}/api/pecas/{id_trabalho}/imagem").status_code == 404
+    assert arquivos_do_produto(tmp_path) == []
+    assert list((tmp_path / "web").iterdir()) == []
+
+
+def test_excluir_uma_versao_mantem_os_arquivos_da_outra(montar, tmp_path):
+    cliente, _ = montar()
+    primeira = enviar(cliente, pedido()).json()["id"]
+    esperar_terminar(cliente, primeira)
+    segunda = enviar(cliente, pedido()).json()["id"]
+    esperar_terminar(cliente, segunda)
+
+    assert cliente.delete(f"{BASE}/api/pecas/{primeira}").status_code == 204
+
+    # A segunda versão é do mesmo produto: os arquivos dele continuam.
+    assert arquivos_do_produto(tmp_path) != []
+    assert cliente.get(f"{BASE}/api/pecas/{segunda}/imagem").status_code == 200
+
+
+def test_nao_exclui_peca_que_ainda_esta_sendo_gerada(montar):
+    cliente, falso = montar()
+    falso.liberado.clear()
+    id_trabalho = enviar(cliente, pedido()).json()["id"]
+
+    resposta = cliente.delete(f"{BASE}/api/pecas/{id_trabalho}")
+    assert resposta.status_code == 409
+    assert "sendo gerada" in resposta.json()["detail"]
+
+    falso.liberado.set()
+    esperar_terminar(cliente, id_trabalho)
+    assert cliente.delete(f"{BASE}/api/pecas/{id_trabalho}").status_code == 204
+
+
+def test_excluir_peca_inexistente_e_404(montar):
+    cliente, _ = montar()
+    assert cliente.delete(f"{BASE}/api/pecas/naoexiste").status_code == 404
+
+
+def test_limite_do_historico_tambem_apaga_os_arquivos(montar, tmp_path, monkeypatch):
+    import web.app as modulo
+    monkeypatch.setattr(modulo, "LIMITE_HISTORICO", 1)
+    cliente, _ = montar()
+    primeira = enviar(cliente, pedido()).json()["id"]
+    esperar_terminar(cliente, primeira)
+    segunda = enviar(cliente, pedido()).json()["id"]
+    esperar_terminar(cliente, segunda)
+
+    ids = [t["id"] for t in cliente.get(f"{BASE}/api/pecas").json()]
+    assert ids == [segunda]
+    # Só sobra a imagem da peça que ficou no histórico.
+    assert [p.name for p in (tmp_path / "web").iterdir()] == [f"{segunda}.png"]

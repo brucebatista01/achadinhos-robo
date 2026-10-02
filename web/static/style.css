@@ -177,6 +177,9 @@ input::placeholder { color: var(--texto-suave); opacity: .7; }
 .botao-secundario:hover { border-color: var(--texto-suave); }
 .botao-texto { background: none; color: var(--texto-suave); padding: 8px 0; font-weight: 500; }
 .botao-texto:hover { color: var(--destaque); }
+.botao-perigo { color: var(--erro); }
+.botao-perigo:hover { color: var(--erro); text-decoration: underline; }
+.acoes-secundarias { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
 .botao-grande { padding: 14px 16px; font-size: 1.05rem; }
 
 /* ---------- Lista de peças ---------- */

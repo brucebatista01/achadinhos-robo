@@ -75,11 +75,18 @@ function resumirLink(link) {
   }
 }
 
+function removerCartao(id) {
+  cartoes.get(id)?.cartao.remove();
+  cartoes.delete(id);
+  vazio.hidden = cartoes.size > 0;
+}
+
 async function api(caminho, opcoes = {}) {
   const resposta = await fetch(caminho, {
     headers: { "Content-Type": "application/json" },
     ...opcoes,
   });
+  // 204 (exclusão) não tem corpo: o catch devolve um objeto vazio.
   const dados = await resposta.json().catch(() => ({}));
   if (!resposta.ok) {
     throw new Error(typeof dados.detail === "string" ? dados.detail : "Não foi possível falar com o servidor.");
@@ -362,6 +369,19 @@ async function executarAcao(acao, id, botao, evento) {
     }
   }
 
+  if (acao === "excluir") {
+    if (!window.confirm("Excluir esta peça? A imagem e os textos serão apagados do servidor.")) return;
+    botao.disabled = true;
+    try {
+      await api(`api/pecas/${id}`, { method: "DELETE" });
+      removerCartao(id);
+      avisar("Peça excluída.");
+    } catch (erro) {
+      avisar(erro.message);
+      botao.disabled = false;
+    }
+  }
+
   if (acao === "refazer") {
     botao.disabled = true;
     try {
@@ -400,6 +420,10 @@ async function consultar() {
     // A lista vem da mais nova para a mais antiga; inserimos de trás para
     // frente para que "prepend" mantenha a mais nova no topo.
     for (const dados of trabalhos.slice().reverse()) atualizarCartao(dados);
+    // Peças que sumiram do servidor (excluídas em outra aba ou pelo limite
+    // do histórico) saem da tela também.
+    const noServidor = new Set(trabalhos.map((t) => t.id));
+    for (const id of [...cartoes.keys()]) if (!noServidor.has(id)) removerCartao(id);
   } catch {
     // Falha de rede passageira: tenta de novo na próxima rodada.
   }

@@ -77,12 +77,18 @@
           <button type="button" class="botao botao-secundario" data-acao="compartilhar" hidden>Compartilhar</button>
           <a class="botao botao-secundario" data-acao="baixar">Baixar imagem</a>
         </div>
-        <button type="button" class="botao botao-texto" data-acao="refazer">Não gostou? Gerar outra versão</button>
+        <div class="acoes-secundarias">
+          <button type="button" class="botao botao-texto" data-acao="refazer">Não gostou? Gerar outra versão</button>
+          <button type="button" class="botao botao-texto botao-perigo" data-acao="excluir">Excluir peça</button>
+        </div>
       </div>
 
       <div class="peca-erro" hidden>
         <p class="peca-erro-texto"></p>
-        <button type="button" class="botao botao-secundario" data-acao="refazer">Tentar de novo</button>
+        <div class="acoes-secundarias">
+          <button type="button" class="botao botao-secundario" data-acao="refazer">Tentar de novo</button>
+          <button type="button" class="botao botao-texto botao-perigo" data-acao="excluir">Excluir</button>
+        </div>
       </div>
     </article>
   </template>
