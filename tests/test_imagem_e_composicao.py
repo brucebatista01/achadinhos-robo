@@ -109,3 +109,57 @@ def test_compor_nao_modifica_a_imagem_original():
     copia = base.copy()
     CompositionService("@canal").compor(base, avaliacao=(4.8, 10))
     assert area_alterada(base, copia) is None
+
+
+# ---------------------------------------------------------------------- #
+# Recorte (casos descobertos com capas de livro)
+# ---------------------------------------------------------------------- #
+
+def png(imagem: Image.Image) -> bytes:
+    import io
+    buffer = io.BytesIO()
+    imagem.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_fracao_borda_branca():
+    assert ImageService.fracao_borda_branca(Image.new("RGB", (100, 100), "white")) == 1.0
+    assert ImageService.fracao_borda_branca(Image.new("RGB", (100, 100), (10, 20, 30))) == 0.0
+    produto_no_branco = Image.new("RGB", (100, 100), "white")
+    produto_no_branco.paste((0, 0, 0), (30, 30, 70, 70))
+    assert ImageService.fracao_borda_branca(produto_no_branco) == 1.0
+
+
+def test_capa_que_ocupa_a_foto_inteira_nao_e_recortada(servico_imagem, monkeypatch):
+    # Sem fundo branco não há o que recortar: a IA nem deve ser chamada.
+    def proibido():
+        raise AssertionError("não deveria usar o modelo de recorte")
+
+    monkeypatch.setattr(servico_imagem, "preparar_modelo", proibido)
+    capa = Image.new("RGB", (60, 90), (15, 40, 30))
+    resultado = servico_imagem.remover_fundo(png(capa))
+    assert resultado.size == capa.size
+    assert resultado.getchannel("A").getextrema() == (255, 255)  # totalmente opaca
+
+
+def test_preencher_buracos_fecha_areas_internas():
+    # Um "anel": quadrado opaco com um furo transparente no meio.
+    anel = Image.new("RGBA", (50, 50), (0, 0, 0, 0))
+    anel.paste((200, 0, 0, 255), (10, 10, 40, 40))
+    anel.paste((0, 0, 0, 0), (20, 20, 30, 30))
+
+    resultado = ImageService._preencher_buracos(anel)
+    assert resultado.getpixel((25, 25))[3] == 255  # o furo foi fechado
+    assert resultado.getpixel((2, 2))[3] == 0      # o fundo de fora continua
+
+
+def test_preservar_produto_mantem_o_produto_original_e_o_cenario():
+    cenario = Image.new("RGBA", (100, 120), (30, 90, 30, 255))
+    # A "IA" pintou o produto de outra cor:
+    cenario.paste((0, 0, 255, 255), (40, 40, 60, 80))
+    enquadrada = Image.new("RGBA", (100, 120), (0, 0, 0, 0))
+    enquadrada.paste((255, 0, 0, 255), (40, 40, 60, 80))  # produto original: vermelho
+
+    resultado = ImageService.preservar_produto(cenario, enquadrada)
+    assert resultado.getpixel((50, 60)) == (255, 0, 0, 255)   # produto fiel
+    assert resultado.getpixel((5, 5)) == (30, 90, 30, 255)    # cenário intacto

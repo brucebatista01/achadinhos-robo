@@ -175,6 +175,9 @@ class Pipeline:
         # Enquadrar antes garante margem para o cenário aparecer.
         enquadrada = self._imagem.enquadrar_produto(sem_fundo)
         ambientada = self._imagem.ambientar_com_ia(enquadrada, cenario["prompt"])
+        # A IA redesenha o produto junto com o cenário e troca letras e cores
+        # (capas de livro mudavam). O produto original volta por cima.
+        ambientada = self._imagem.preservar_produto(ambientada, enquadrada)
 
         ao_avancar(5, ETAPAS[4])
         final = self._composicao.compor(ambientada, avaliacao)

@@ -14,11 +14,13 @@ import io
 import os
 from pathlib import Path
 
+import numpy as np
 import onnxruntime
 import requests
 from dotenv import load_dotenv
 from PIL import Image
 from rembg import new_session, remove
+from scipy.ndimage import binary_fill_holes
 
 # Carrega as variáveis do arquivo .env (as chaves de API).
 load_dotenv()
@@ -82,20 +84,59 @@ class ImageService:
             raise ImageError(f"Falha ao baixar imagem: {erro}") from erro
         return resposta.content
 
+    # Fração mínima da borda que precisa ser branca para a foto ter um
+    # "fundo de estúdio" a remover. Medido em 02/10/2026: produtos comuns
+    # da Amazon ficam entre 0,82 e 0,97; capas de livro que ocupam a foto
+    # inteira ficam em 0,0.
+    _BORDA_BRANCA_MINIMA = 0.5
+
+    @staticmethod
+    def fracao_borda_branca(imagem: Image.Image, faixa: int = 6, limiar: int = 240) -> float:
+        """Quanto da borda da foto (0 a 1) é praticamente branco."""
+        pixels = np.asarray(imagem.convert("RGB"))
+        borda = np.concatenate([
+            pixels[:faixa].reshape(-1, 3), pixels[-faixa:].reshape(-1, 3),
+            pixels[:, :faixa].reshape(-1, 3), pixels[:, -faixa:].reshape(-1, 3),
+        ])
+        return float((borda.min(axis=1) >= limiar).mean())
+
     def remover_fundo(self, imagem_bytes: bytes) -> Image.Image:
         """
         Remove o fundo da imagem usando IA local (rembg).
 
         Recebe os bytes da imagem original e retorna um objeto de imagem
         Pillow em modo RGBA (com canal de transparência).
+
+        Dois cuidados, descobertos com capas de livro:
+        1. Foto SEM fundo branco (a capa ocupa a foto inteira) não tem o que
+           recortar: a IA apagava as partes escuras da própria capa. Nesse
+           caso a foto inteira é o produto.
+        2. A IA às vezes deixa o produto semitransparente (80% dos pixels de
+           um box de livros saíam assim). O pós-processamento do rembg deixa
+           a máscara sólida, e "preencher buracos" fecha áreas internas que
+           ela confundiu com fundo (ex.: partes brancas de uma capa).
         """
         try:
+            original = Image.open(io.BytesIO(imagem_bytes)).convert("RGBA")
+            if self.fracao_borda_branca(original) < self._BORDA_BRANCA_MINIMA:
+                return original
+
             self.preparar_modelo()
-            resultado_bytes = remove(imagem_bytes, session=self._sessao_rembg)
-            imagem = Image.open(io.BytesIO(resultado_bytes)).convert("RGBA")
+            resultado = remove(imagem_bytes, session=self._sessao_rembg, post_process_mask=True)
+            imagem = Image.open(io.BytesIO(resultado)).convert("RGBA")
         except Exception as erro:
             raise ImageError(f"Falha ao remover o fundo: {erro}") from erro
-        return imagem
+        return self._preencher_buracos(imagem)
+
+    @staticmethod
+    def _preencher_buracos(imagem: Image.Image) -> Image.Image:
+        """Torna opaca toda área transparente cercada pelo produto."""
+        alfa = np.asarray(imagem.getchannel("A"))
+        solido = binary_fill_holes(alfa >= 128)
+        alfa_novo = np.where(solido & (alfa < 128), 255, alfa).astype("uint8")
+        resultado = imagem.copy()
+        resultado.putalpha(Image.fromarray(alfa_novo))
+        return resultado
 
     def enquadrar_produto(
         self,
@@ -200,6 +241,25 @@ class ImageService:
             raise ImageError(f"Resposta do PhotoRoom não é uma imagem válida: {erro}") from erro
 
         return imagem_final
+
+    @staticmethod
+    def preservar_produto(ambientada: Image.Image, enquadrada: Image.Image) -> Image.Image:
+        """
+        Cola o produto ORIGINAL por cima do cenário gerado pela IA.
+
+        O PhotoRoom redesenha o produto junto com o cenário e, em produtos
+        com texto (capas de livro, embalagens), troca letras e cores. Como
+        mandamos o produto já enquadrado (ver enquadrar_produto) e pedimos
+        o mesmo enquadramento de volta, ele está exatamente no mesmo lugar
+        nas duas imagens: colar o original garante a capa fiel, e o cenário
+        (e as sombras em volta) continuam vindo da IA.
+        """
+        if ambientada.size != enquadrada.size:
+            # Não deveria acontecer; se acontecer, ajusta em vez de falhar.
+            enquadrada = enquadrada.resize(ambientada.size, Image.Resampling.LANCZOS)
+        resultado = ambientada.convert("RGBA")
+        resultado.alpha_composite(enquadrada.convert("RGBA"))
+        return resultado
 
     def salvar_png(self, imagem: Image.Image, nome_arquivo: str) -> Path:
         """Salva a imagem como PNG (preserva a transparência) na pasta de saída."""
