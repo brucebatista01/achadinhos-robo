@@ -38,6 +38,9 @@ class VisionService:
         "Responda APENAS com um objeto JSON válido, sem texto antes ou depois:\n"
         '{"produto": "nome curto", "categoria": "categoria geral", '
         '"prompt": "descrição do cenário em INGLÊS"}\n\n'
+        "Os campos 'produto' e 'categoria' vão para o post do canal: escreva-os "
+        "em PORTUGUÊS DO BRASIL (ex.: 'Lanterna Tática LED', nunca "
+        "'Tactical LED Flashlight'). Só o 'prompt' é em inglês.\n\n"
         "REGRAS para o campo 'prompt':\n"
         "1. Nomeie uma SUPERFÍCIE concreta e texturizada onde o produto repousa "
         "(ex.: rustic wooden table, white marble countertop, dark slate surface, "
