@@ -38,7 +38,8 @@ class PipelineFalso:
             raise self._erro
         imagem = self._pasta / "B000TESTE_final.png"
         Image.new("RGB", (40, 50), "orange").save(imagem)
-        return Peca("B000TESTE", "Lanterna Teste", imagem, self._pasta / "m.txt", "MENSAGEM")
+        mensagens = {o.loja: f"POST {o.loja.upper()}" for o in produto.ofertas}
+        return Peca("B000TESTE", "Lanterna Teste", imagem, mensagens)
 
 
 @pytest.fixture
@@ -69,7 +70,16 @@ def esperar_terminar(cliente, id_trabalho, limite=5.0):
     raise AssertionError("o trabalho não terminou a tempo")
 
 
-PEDIDO = {"link": "https://amzn.to/abc", "preco_por": "129,90", "preco_de": "199,90", "cupom": "luz10"}
+def pedido(**ofertas) -> dict:
+    """Monta o corpo do pedido; sem argumentos, só a oferta da Amazon."""
+    return {
+        "link_amazon": "https://amzn.to/abc",
+        "ofertas": ofertas or {"amazon": {"preco_por": "129,90", "preco_de": "199,90", "cupom": "luz10"}},
+    }
+
+
+def enviar(cliente, corpo):
+    return cliente.post(f"{BASE}/api/pecas", json=corpo)
 
 
 # ---------------------------------------------------------------------- #
@@ -100,77 +110,112 @@ def test_estaticos_nao_deixam_sair_da_pasta(montar):
 # ---------------------------------------------------------------------- #
 
 @pytest.mark.parametrize(
-    ("mudanca", "trecho_do_erro"),
+    ("corpo", "trecho_do_erro"),
     [
-        ({"link": "não é um link"}, "Cole o link"),
-        ({"link": ""}, "Cole o link"),
-        ({"preco_por": ""}, "preço POR"),
-        ({"preco_por": "abc"}, "Preço inválido"),
-        ({"preco_de": "0"}, "maior que zero"),
+        ({**pedido(), "link_amazon": "não é link"}, "link do produto na Amazon"),
+        (pedido(amazon={"preco_por": ""}, shopee={}), "pelo menos uma loja"),
+        (pedido(amazon={"preco_por": "abc"}), "Amazon: Preço inválido"),
+        (pedido(shopee={"preco_por": "10"}), "Shopee: cole o seu link"),
+        (pedido(magalu={"link": "https://magalu.com/x"}), "Magalu: informe o preço POR"),
+        (pedido(mercadolivre={"link": "https://a.b/c", "preco_por": "10", "preco_de": "0"}),
+         "Mercado Livre: Preço precisa ser maior que zero"),
+        (pedido(aliexpress={"link": "https://a.b/c", "preco_por": "10"}), "Loja desconhecida"),
     ],
 )
-def test_formulario_invalido_responde_422_com_mensagem(montar, mudanca, trecho_do_erro):
+def test_formulario_invalido_responde_422_com_mensagem(montar, corpo, trecho_do_erro):
     cliente, falso = montar()
-    resposta = cliente.post(f"{BASE}/api/pecas", json={**PEDIDO, **mudanca})
+    resposta = enviar(cliente, corpo)
     assert resposta.status_code == 422
     assert trecho_do_erro in resposta.json()["detail"]
     assert falso.produtos == []  # nada entrou na fila
+
+
+def test_link_sem_https_e_completado(montar):
+    cliente, falso = montar()
+    corpo = pedido(shopee={"link": "s.shopee.com.br/x", "preco_por": "10"})
+    corpo["link_amazon"] = "amzn.to/abc"
+    esperar_terminar(cliente, enviar(cliente, corpo).json()["id"])
+    produto = falso.produtos[0]
+    assert produto.link_amazon == "https://amzn.to/abc"
+    assert produto.ofertas[0].link == "https://s.shopee.com.br/x"
+
+
+def test_lojas_vazias_sao_ignoradas_e_a_ordem_e_fixa(montar):
+    cliente, falso = montar()
+    corpo = pedido(
+        magalu={"link": "https://magalu.com/x", "preco_por": "30"},
+        shopee={"link": "", "preco_por": "", "preco_de": "", "cupom": ""},  # vazia
+        amazon={"preco_por": "10"},
+    )
+    esperar_terminar(cliente, enviar(cliente, corpo).json()["id"])
+    ofertas = falso.produtos[0].ofertas
+    assert [o.loja for o in ofertas] == ["amazon", "magalu"]
+    # Amazon sem link colado: o pipeline monta o link com a etiqueta depois.
+    assert ofertas[0].link is None
 
 
 # ---------------------------------------------------------------------- #
 # Fila de trabalhos
 # ---------------------------------------------------------------------- #
 
-def test_gera_peca_do_inicio_ao_fim(montar):
+def test_gera_um_post_por_loja(montar):
     cliente, falso = montar()
-
-    resposta = cliente.post(f"{BASE}/api/pecas", json=PEDIDO)
+    corpo = pedido(
+        amazon={"preco_por": "129,90", "preco_de": "199,90", "cupom": "luz10"},
+        shopee={"link": "https://s.shopee.com.br/x", "preco_por": "119,90"},
+    )
+    resposta = enviar(cliente, corpo)
     assert resposta.status_code == 202
     dados = esperar_terminar(cliente, resposta.json()["id"])
 
     assert dados["estado"] == "pronto"
     assert dados["etapa"] == len(ETAPAS)
     assert dados["nome_produto"] == "Lanterna Teste"
-    assert dados["mensagem"] == "MENSAGEM"
-    # O formulário chega convertido para o pipeline.
-    produto = falso.produtos[0]
-    assert (produto.preco_por, produto.preco_de, produto.cupom) == (129.90, 199.90, "LUZ10")
+    assert dados["mensagens"] == [
+        {"loja": "amazon", "nome_loja": "Amazon", "texto": "POST AMAZON"},
+        {"loja": "shopee", "nome_loja": "Shopee", "texto": "POST SHOPEE"},
+    ]
+    amazon = falso.produtos[0].ofertas[0]
+    assert (amazon.preco_por, amazon.preco_de, amazon.cupom) == (129.90, 199.90, "LUZ10")
 
     imagem = cliente.get(f"{BASE}/{dados['url_imagem']}")
     assert imagem.status_code == 200
     assert imagem.headers["content-type"] == "image/png"
 
 
-def test_link_sem_https_e_completado(montar):
-    cliente, falso = montar()
-    id_trabalho = cliente.post(f"{BASE}/api/pecas", json={**PEDIDO, "link": "amzn.to/abc"}).json()["id"]
-    esperar_terminar(cliente, id_trabalho)
-    assert falso.produtos[0].link == "https://amzn.to/abc"
-
-
 def test_lista_mostra_a_peca_mais_nova_primeiro(montar):
     cliente, _ = montar()
-    primeiro = cliente.post(f"{BASE}/api/pecas", json=PEDIDO).json()["id"]
+    primeiro = enviar(cliente, pedido()).json()["id"]
     esperar_terminar(cliente, primeiro)
-    segundo = cliente.post(f"{BASE}/api/pecas", json=PEDIDO).json()["id"]
+    segundo = enviar(cliente, pedido()).json()["id"]
     esperar_terminar(cliente, segundo)
 
     ids = [t["id"] for t in cliente.get(f"{BASE}/api/pecas").json()]
     assert ids == [segundo, primeiro]
 
 
+def test_refazer_gera_outra_peca_com_os_mesmos_dados(montar):
+    cliente, falso = montar()
+    primeiro = enviar(cliente, pedido()).json()["id"]
+    esperar_terminar(cliente, primeiro)
+
+    resposta = cliente.post(f"{BASE}/api/pecas/{primeiro}/refazer")
+    assert resposta.status_code == 202
+    assert resposta.json()["id"] != primeiro
+    esperar_terminar(cliente, resposta.json()["id"])
+    assert falso.produtos[1] == falso.produtos[0]
+
+
 def test_erro_esperado_aparece_com_a_mensagem_do_servico(montar):
     cliente, _ = montar(erro=AmazonError("Produto indisponível"))
-    id_trabalho = cliente.post(f"{BASE}/api/pecas", json=PEDIDO).json()["id"]
-    dados = esperar_terminar(cliente, id_trabalho)
+    dados = esperar_terminar(cliente, enviar(cliente, pedido()).json()["id"])
     assert dados["estado"] == "erro"
     assert dados["erro"] == "Produto indisponível"
 
 
 def test_bug_inesperado_vira_mensagem_amigavel(montar):
     cliente, _ = montar(erro=ZeroDivisionError("detalhe interno"))
-    id_trabalho = cliente.post(f"{BASE}/api/pecas", json=PEDIDO).json()["id"]
-    dados = esperar_terminar(cliente, id_trabalho)
+    dados = esperar_terminar(cliente, enviar(cliente, pedido()).json()["id"])
     assert dados["estado"] == "erro"
     assert "detalhe interno" not in dados["erro"]  # não vaza detalhe técnico
 
@@ -178,3 +223,4 @@ def test_bug_inesperado_vira_mensagem_amigavel(montar):
 def test_peca_inexistente_e_404(montar):
     cliente, _ = montar()
     assert cliente.get(f"{BASE}/api/pecas/naoexiste").status_code == 404
+    assert cliente.post(f"{BASE}/api/pecas/naoexiste/refazer").status_code == 404

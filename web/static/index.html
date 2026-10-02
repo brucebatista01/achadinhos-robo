@@ -29,31 +29,13 @@
                  placeholder="https://amzn.to/..." required>
           <button type="button" id="botao-colar" class="botao botao-secundario" hidden>Colar</button>
         </div>
-      </div>
-
-      <div class="duas-colunas">
-        <div class="campo">
-          <label for="preco_por">Preço POR</label>
-          <div class="com-prefixo">
-            <span aria-hidden="true">R$</span>
-            <input id="preco_por" name="preco_por" inputmode="decimal" autocomplete="off"
-                   placeholder="129,90" required>
-          </div>
-        </div>
-        <div class="campo">
-          <label for="preco_de">Preço DE <span class="opcional">opcional</span></label>
-          <div class="com-prefixo">
-            <span aria-hidden="true">R$</span>
-            <input id="preco_de" name="preco_de" inputmode="decimal" autocomplete="off"
-                   placeholder="199,90">
-          </div>
-        </div>
+        <p class="dica">A foto e a avaliação sempre vêm daqui.</p>
       </div>
 
       <div class="campo">
-        <label for="cupom">Cupom <span class="opcional">opcional</span></label>
-        <input id="cupom" name="cupom" autocomplete="off" autocapitalize="characters"
-               placeholder="EX: DESCONTO10" class="maiusculas">
+        <span class="rotulo">Onde postar</span>
+        <p class="dica">Preencha só as lojas em que o produto está à venda. Cada uma vira um post com o seu link e o seu preço.</p>
+        <div id="lojas" class="lojas"></div>
       </div>
 
       <p id="erro-formulario" class="erro-formulario" role="alert" hidden></p>
@@ -89,9 +71,8 @@
 
       <div class="peca-pronta" hidden>
         <img class="peca-imagem" alt="Imagem da peça gerada">
-        <pre class="peca-mensagem"></pre>
+        <div class="posts"></div>
         <div class="acoes">
-          <button type="button" class="botao botao-principal" data-acao="copiar-texto">Copiar texto</button>
           <button type="button" class="botao botao-secundario" data-acao="copiar-imagem">Copiar imagem</button>
           <button type="button" class="botao botao-secundario" data-acao="compartilhar" hidden>Compartilhar</button>
           <a class="botao botao-secundario" data-acao="baixar">Baixar imagem</a>
@@ -104,6 +85,47 @@
         <button type="button" class="botao botao-secundario" data-acao="refazer">Tentar de novo</button>
       </div>
     </article>
+  </template>
+
+  <!-- Bloco de uma loja no formulário (repetido para cada loja pelo app.js) -->
+  <template id="modelo-loja">
+    <details class="loja">
+      <summary><span class="loja-nome"></span><span class="loja-resumo"></span></summary>
+      <div class="loja-campos">
+        <div class="campo">
+          <label data-campo="link">Seu link de afiliado</label>
+          <input data-campo="link" type="url" inputmode="url" autocomplete="off">
+        </div>
+        <div class="duas-colunas">
+          <div class="campo">
+            <label data-campo="preco_por">Preço POR</label>
+            <div class="com-prefixo"><span aria-hidden="true">R$</span>
+              <input data-campo="preco_por" inputmode="decimal" autocomplete="off" placeholder="129,90"></div>
+          </div>
+          <div class="campo">
+            <label data-campo="preco_de">Preço DE <span class="opcional">opcional</span></label>
+            <div class="com-prefixo"><span aria-hidden="true">R$</span>
+              <input data-campo="preco_de" inputmode="decimal" autocomplete="off" placeholder="199,90"></div>
+          </div>
+        </div>
+        <div class="campo">
+          <label data-campo="cupom">Cupom <span class="opcional">opcional</span></label>
+          <input data-campo="cupom" autocomplete="off" autocapitalize="characters"
+                 placeholder="EX: DESCONTO10" class="maiusculas">
+        </div>
+      </div>
+    </details>
+  </template>
+
+  <!-- Um post pronto, com o botão de copiar (repetido para cada loja) -->
+  <template id="modelo-post">
+    <details class="post">
+      <summary>
+        <span class="post-loja"></span>
+        <button type="button" class="botao botao-principal" data-acao="copiar-post"></button>
+      </summary>
+      <pre class="peca-mensagem"></pre>
+    </details>
   </template>
 
   <script src="static/app.js"></script>

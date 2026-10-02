@@ -36,7 +36,9 @@ from pydantic import BaseModel
 from pipeline import (
     ERROS_DO_PIPELINE,
     ETAPAS,
+    LOJAS,
     PASTA_SAIDA,
+    Oferta,
     Pipeline,
     Produto,
     ProdutoInvalidoError,
@@ -85,7 +87,7 @@ class Trabalho:
     etapa: int = 0
     descricao: str = "Na fila"
     nome_produto: str | None = None
-    mensagem: str | None = None
+    mensagens: dict[str, str] = field(default_factory=dict)
     imagem: Path | None = None
     erro: str | None = None
 
@@ -97,15 +99,20 @@ class Trabalho:
             "total_etapas": len(ETAPAS),
             "descricao": self.descricao,
             "nome_produto": self.nome_produto,
-            "mensagem": self.mensagem,
+            # Lista (e não dicionário) para manter a ordem das lojas na tela.
+            "mensagens": [
+                {"loja": loja, "nome_loja": LOJAS[loja], "texto": texto}
+                for loja, texto in self.mensagens.items()
+            ],
             # O id na URL evita que o navegador mostre uma imagem antiga do cache.
             "url_imagem": f"api/pecas/{self.id}/imagem" if self.imagem else None,
             "erro": self.erro,
             "entrada": {
-                "link": self.produto.link,
-                "preco_por": self.produto.preco_por,
-                "preco_de": self.produto.preco_de,
-                "cupom": self.produto.cupom,
+                "link_amazon": self.produto.link_amazon,
+                "ofertas": [
+                    {"loja": o.loja, "nome_loja": LOJAS[o.loja], "preco_por": o.preco_por}
+                    for o in self.produto.ofertas
+                ],
             },
         }
 
@@ -182,7 +189,7 @@ class Fabrica:
             trabalho.erro = "Erro inesperado. Tente de novo; se repetir, avise o Bruce."
         else:
             trabalho.nome_produto = peca.nome_produto
-            trabalho.mensagem = peca.mensagem
+            trabalho.mensagens = peca.mensagens
             trabalho.imagem = copia
             trabalho.descricao = "Pronto"
             trabalho.estado = "pronto"
@@ -192,33 +199,73 @@ class Fabrica:
 # API
 # ---------------------------------------------------------------------- #
 
-class PedidoPeca(BaseModel):
-    """O que a interface envia. Preços chegam como texto ("169,90")."""
+class PedidoOferta(BaseModel):
+    """Os campos de uma loja no formulário. Preços chegam como texto ("169,90")."""
 
-    link: str
-    preco_por: str
+    link: str = ""
+    preco_por: str = ""
     preco_de: str = ""
     cupom: str = ""
+
+    def preenchida(self) -> bool:
+        return any(v.strip() for v in (self.link, self.preco_por, self.preco_de, self.cupom))
+
+
+class PedidoPeca(BaseModel):
+    """O que a interface envia: o link da Amazon e os campos de cada loja."""
+
+    link_amazon: str
+    ofertas: dict[str, PedidoOferta] = {}
+
+
+def normalizar_link(link: str) -> str:
+    """Completa o "https://" que muita gente esquece ao copiar o link."""
+    link = link.strip()
+    if link and "." in link and " " not in link and "://" not in link:
+        link = f"https://{link}"
+    return link
+
+
+def montar_oferta(loja: str, pedido: PedidoOferta) -> Oferta:
+    nome = LOJAS[loja]
+    link = normalizar_link(pedido.link)
+    if link and not link.startswith(("http://", "https://")):
+        raise ProdutoInvalidoError(f"{nome}: o link não parece um endereço válido.")
+    if not link and loja != "amazon":
+        raise ProdutoInvalidoError(f"{nome}: cole o seu link de afiliado.")
+    if not pedido.preco_por.strip():
+        raise ProdutoInvalidoError(f"{nome}: informe o preço POR.")
+    try:
+        return Oferta(
+            loja=loja,
+            link=link or None,
+            preco_por=converter_preco(pedido.preco_por),
+            preco_de=converter_preco(pedido.preco_de) if pedido.preco_de.strip() else None,
+            cupom=pedido.cupom.strip().upper() or None,
+        )
+    except ProdutoInvalidoError as erro:
+        raise ProdutoInvalidoError(f"{nome}: {erro}") from erro
 
 
 def montar_produto(pedido: PedidoPeca) -> Produto:
     """Valida o formulário e converte para o Produto do pipeline."""
-    link = pedido.link.strip()
-    # Muita gente copia o link sem o "https://" (ex.: "amzn.to/abc").
-    # Melhor completar do que dar erro por um detalhe.
-    if link and "." in link and " " not in link and "://" not in link:
-        link = f"https://{link}"
-    if not link.startswith(("http://", "https://")):
-        raise ProdutoInvalidoError("Cole o link do produto (ex.: https://amzn.to/...).")
-    if not pedido.preco_por.strip():
-        raise ProdutoInvalidoError("Informe o preço POR.")
-    produto = Produto(
-        link=link,
-        preco_por=converter_preco(pedido.preco_por),
-        preco_de=converter_preco(pedido.preco_de) if pedido.preco_de.strip() else None,
-        cupom=pedido.cupom.strip().upper() or None,
+    link_amazon = normalizar_link(pedido.link_amazon)
+    if not link_amazon.startswith(("http://", "https://")):
+        raise ProdutoInvalidoError("Cole o link do produto na Amazon (ex.: https://amzn.to/...).")
+
+    lojas_desconhecidas = set(pedido.ofertas) - set(LOJAS)
+    if lojas_desconhecidas:
+        raise ProdutoInvalidoError(f"Loja desconhecida: {', '.join(sorted(lojas_desconhecidas))}.")
+
+    # Só entram as lojas que o operador preencheu, na ordem fixa de LOJAS.
+    ofertas = tuple(
+        montar_oferta(loja, pedido.ofertas[loja])
+        for loja in LOJAS
+        if loja in pedido.ofertas and pedido.ofertas[loja].preenchida()
     )
-    return produto
+    if not ofertas:
+        raise ProdutoInvalidoError("Preencha o preço de pelo menos uma loja.")
+    return Produto(link_amazon=link_amazon, ofertas=ofertas)
 
 
 def criar_app(token: str | None = None, fabrica: Fabrica | None = None) -> FastAPI:
@@ -278,6 +325,12 @@ def criar_app(token: str | None = None, fabrica: Fabrica | None = None) -> FastA
         except ProdutoInvalidoError as erro:
             raise HTTPException(status_code=422, detail=str(erro)) from erro
         return fabrica.criar(produto).para_json()
+
+    @app.post("/p/{chave}/api/pecas/{id_trabalho}/refazer", dependencies=protegido,
+              status_code=202)
+    def refazer_peca(chave: str, id_trabalho: str):
+        # Gera outra versão com os mesmos dados que já estão no servidor.
+        return fabrica.criar(trabalho_ou_404(id_trabalho).produto).para_json()
 
     @app.get("/p/{chave}/api/pecas", dependencies=protegido)
     def listar_pecas(chave: str):

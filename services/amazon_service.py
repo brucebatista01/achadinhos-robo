@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import quote
 
 import requests
 
@@ -72,6 +73,19 @@ class AmazonService:
     def montar_url_limpa(self, asin: str) -> str:
         """Monta uma URL de produto limpa, sem parâmetros de rastreamento."""
         return f"https://www.amazon.com.br/dp/{asin}"
+
+    def montar_link_afiliado(self, asin: str, etiqueta: str | None) -> str | None:
+        """
+        Monta o link de afiliado a partir da etiqueta (ex.: 'danilo-20').
+
+        O link de afiliado da Amazon é só o link do produto com a etiqueta
+        no parâmetro 'tag'; é isso que o SiteStripe gera. Sem etiqueta
+        configurada, devolve None e quem chamou decide o que usar.
+        """
+        etiqueta = (etiqueta or "").strip()
+        if not etiqueta:
+            return None
+        return f"{self.montar_url_limpa(asin)}?tag={quote(etiqueta)}"
 
     def baixar_html(self, url_produto: str) -> str:
         """Baixa o HTML bruto da página do produto."""

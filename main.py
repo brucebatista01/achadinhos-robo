@@ -19,6 +19,7 @@ from pipeline import (
     ERROS_DO_PIPELINE,
     ETAPAS,
     PASTA_SAIDA,
+    Oferta,
     Pipeline,
     Produto,
     ProdutoInvalidoError,
@@ -42,6 +43,9 @@ def interpretar_linha(linha: str) -> Produto:
     """
     Formato: link | preco_por | preco_de | cupom
     Só link e preco_por são obrigatórios.
+
+    O lote pelo terminal gera só o post da Amazon; os posts das outras
+    lojas são feitos pelo app web, que tem um campo para cada loja.
     """
     campos = [campo.strip() for campo in linha.split("|")]
     if len(campos) < 2 or not campos[0] or not campos[1]:
@@ -54,12 +58,14 @@ def interpretar_linha(linha: str) -> Produto:
     campos += [""] * (4 - len(campos))  # completa os opcionais vazios
     link, preco_por, preco_de, cupom = campos
 
-    return Produto(
+    oferta = Oferta(
+        loja="amazon",
         link=link,
         preco_por=converter_preco(preco_por),
         preco_de=converter_preco(preco_de) if preco_de else None,
         cupom=cupom or None,
     )
+    return Produto(link_amazon=link, ofertas=(oferta,))
 
 
 def ler_produtos(caminho: Path) -> list[Produto]:
@@ -129,16 +135,17 @@ def main() -> int:
     falhas: list[str] = []
 
     for indice, produto in enumerate(produtos, 1):
-        log.info("Produto %d de %d: %s", indice, len(produtos), produto.link)
+        log.info("Produto %d de %d: %s", indice, len(produtos), produto.link_amazon)
         try:
             peca = pipeline.processar(produto, ao_avancar=mostrar_etapa)
         except ERROS_DO_PIPELINE as erro:
             # Um produto com problema não derruba o lote inteiro.
             log.error("  ✗ Falhou: %s", erro)
-            falhas.append(f"{produto.link} -> {erro}")
+            falhas.append(f"{produto.link_amazon} -> {erro}")
         else:
-            log.info("  ✓ Pronto: %s e %s", peca.caminho_imagem, peca.caminho_mensagem)
-            sucessos.append(produto.link)
+            log.info("  ✓ Pronto: %s (+ texto em %s/%s_amazon.txt)",
+                     peca.caminho_imagem, PASTA_SAIDA, peca.asin)
+            sucessos.append(produto.link_amazon)
 
         if indice < len(produtos):
             time.sleep(SEGUNDOS_ENTRE_PRODUTOS)

@@ -31,10 +31,15 @@ load_dotenv()
 
 PASTA_SAIDA = Path("output")
 
+
+class PipelineError(Exception):
+    """Falha do próprio pipeline (ex.: oferta sem link de afiliado)."""
+
+
 # Todas as falhas "esperadas" do pipeline. Qualquer outra exceção é bug
 # de verdade e merece aparecer com o traceback completo.
 ERROS_DO_PIPELINE = (
-    AmazonError, ImageError, VisionError, CompositionError, MessageError
+    AmazonError, ImageError, VisionError, CompositionError, MessageError, PipelineError
 )
 
 # Nomes das etapas, na ordem. Ficam aqui (e não espalhados no código) para
@@ -56,25 +61,51 @@ class ProdutoInvalidoError(ValueError):
     """Dados do produto mal preenchidos (preço inválido, link vazio...)."""
 
 
-@dataclass(frozen=True)
-class Produto:
-    """O que o operador informa: o link e os dados da oferta."""
+# Lojas em que o Danilo é afiliado, na ordem em que aparecem na tela.
+# A chave é o identificador interno; o valor, o nome mostrado ao usuário.
+LOJAS = {
+    "amazon": "Amazon",
+    "shopee": "Shopee",
+    "mercadolivre": "Mercado Livre",
+    "magalu": "Magalu",
+}
 
-    link: str
+
+@dataclass(frozen=True)
+class Oferta:
+    """O produto à venda numa loja: link de afiliado e preços DAQUELA loja."""
+
+    loja: str  # uma das chaves de LOJAS
     preco_por: float
+    # Na Amazon pode ficar vazio: o robô monta o link com a etiqueta de
+    # afiliado (AMAZON_TAG). Nas outras lojas é obrigatório.
+    link: str | None = None
     preco_de: float | None = None
     cupom: str | None = None
 
 
 @dataclass(frozen=True)
+class Produto:
+    """
+    O que o operador informa.
+
+    A foto e a avaliação vêm SEMPRE da Amazon (`link_amazon`), que é a única
+    loja que deixa o robô ler a página. As ofertas dizem onde o produto está
+    à venda; cada uma vira um post com o seu link e o seu preço.
+    """
+
+    link_amazon: str
+    ofertas: tuple[Oferta, ...]
+
+
+@dataclass(frozen=True)
 class Peca:
-    """O resultado: a peça pronta para revisar e publicar."""
+    """O resultado: uma imagem e um texto pronto para cada loja."""
 
     asin: str
     nome_produto: str
     caminho_imagem: Path
-    caminho_mensagem: Path
-    mensagem: str
+    mensagens: dict[str, str]  # loja -> texto pronto para colar
 
 
 def converter_preco(texto: str) -> float:
@@ -123,7 +154,7 @@ class Pipeline:
     def processar(self, produto: Produto, ao_avancar: AoAvancar = _nao_avisar) -> Peca:
         """Executa o pipeline completo e devolve a peça salva em disco."""
         ao_avancar(1, ETAPAS[0])
-        link_real = self._amazon.resolver_link(produto.link)
+        link_real = self._amazon.resolver_link(produto.link_amazon)
         asin = self._amazon.extrair_asin(link_real)
         html = self._amazon.baixar_html(self._amazon.montar_url_limpa(asin))
         url_foto = self._amazon.extrair_imagem_principal(html)
@@ -147,15 +178,31 @@ class Pipeline:
         caminho_imagem = self._imagem.salvar_png(final, f"{asin}_final")
 
         ao_avancar(6, ETAPAS[5])
-        mensagem = self._mensagem.gerar_mensagem(
-            produto=nome_produto,
-            categoria=cenario.get("categoria", ""),
-            link=produto.link,  # o link ORIGINAL, que tem o código de afiliado
-            preco_por=produto.preco_por,
-            preco_de=produto.preco_de,
-            cupom=produto.cupom,
-        )
-        caminho_mensagem = self._pasta_saida / f"{asin}_mensagem.txt"
-        caminho_mensagem.write_text(mensagem, encoding="utf-8")
+        # Uma headline só (uma chamada à IA), reaproveitada em todos os posts:
+        # o produto é o mesmo, só mudam o link e o preço.
+        headline = self._mensagem.gerar_headline(nome_produto, cenario.get("categoria", ""))
+        mensagens: dict[str, str] = {}
+        for oferta in produto.ofertas:
+            texto = self._mensagem.formatar_mensagem(
+                headline=headline,
+                produto=nome_produto,
+                link=self._link_da_oferta(oferta, produto.link_amazon, asin),
+                preco_por=oferta.preco_por,
+                preco_de=oferta.preco_de,
+                cupom=oferta.cupom,
+            )
+            (self._pasta_saida / f"{asin}_{oferta.loja}.txt").write_text(texto, encoding="utf-8")
+            mensagens[oferta.loja] = texto
 
-        return Peca(asin, nome_produto, caminho_imagem, caminho_mensagem, mensagem)
+        return Peca(asin, nome_produto, caminho_imagem, mensagens)
+
+    def _link_da_oferta(self, oferta: Oferta, link_amazon: str, asin: str) -> str:
+        """
+        O link que vai no post. Se o operador colou um link, ele manda.
+        Na Amazon sem link colado, montamos o de afiliado pela etiqueta.
+        """
+        if oferta.link:
+            return oferta.link
+        if oferta.loja != "amazon":
+            raise PipelineError(f"Falta o link de afiliado da {LOJAS[oferta.loja]}.")
+        return self._amazon.montar_link_afiliado(asin, os.getenv("AMAZON_TAG")) or link_amazon

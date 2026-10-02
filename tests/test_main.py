@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from main import (
+    Oferta,
     Produto,
     ProdutoInvalidoError,
     converter_preco,
@@ -35,18 +36,19 @@ def test_converter_preco_rejeita_valores_invalidos(texto):
 
 def test_interpretar_linha_completa():
     produto = interpretar_linha("https://amzn.to/a | 169,97 | 278,65 | LUZ10")
-    assert produto == Produto("https://amzn.to/a", 169.97, 278.65, "LUZ10")
+    oferta = Oferta("amazon", 169.97, "https://amzn.to/a", 278.65, "LUZ10")
+    assert produto == Produto("https://amzn.to/a", (oferta,))
 
 
 def test_interpretar_linha_so_com_obrigatorios():
     produto = interpretar_linha("https://amzn.to/a | 10")
-    assert produto == Produto("https://amzn.to/a", 10.0, None, None)
+    assert produto.ofertas == (Oferta("amazon", 10.0, "https://amzn.to/a"),)
 
 
 def test_interpretar_linha_com_campo_opcional_vazio():
     produto = interpretar_linha("https://amzn.to/a | 10 | | CUPOM")
-    assert produto.preco_de is None
-    assert produto.cupom == "CUPOM"
+    assert produto.ofertas[0].preco_de is None
+    assert produto.ofertas[0].cupom == "CUPOM"
 
 
 @pytest.mark.parametrize(
@@ -73,5 +75,5 @@ def test_ler_produtos_ignora_comentarios_vazias_e_linhas_ruins(tmp_path):
     produtos = ler_produtos(arquivo)
 
     # A linha ruim é pulada, mas NÃO derruba as outras.
-    assert [p.link for p in produtos] == ["https://a", "https://b"]
-    assert produtos[1].preco_de == pytest.approx(9.90)
+    assert [p.link_amazon for p in produtos] == ["https://a", "https://b"]
+    assert produtos[1].ofertas[0].preco_de == pytest.approx(9.90)

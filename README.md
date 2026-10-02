@@ -11,16 +11,22 @@ canal (modo semiautomático).
 ## Usando pelo app (o jeito fácil)
 
 1. Abra o link do app no celular ou no computador.
-2. Cole o **link do produto** e preencha o **preço POR**. O **preço DE** e o
-   **cupom** são opcionais.
-3. Toque em **Gerar peça** e acompanhe as etapas na tela (cerca de 15 segundos).
-   Enquanto isso, você já pode colar o próximo link: as peças entram na fila.
-4. Quando a peça ficar pronta:
-   - **Copiar texto**, depois cole no canal;
-   - **Copiar imagem** ou **Baixar imagem**;
-   - no celular, **Compartilhar** abre direto o WhatsApp.
-5. Não gostou do resultado? **Gerar outra versão** faz uma nova, com outro
-   cenário e outra frase.
+2. Cole o **link do produto na Amazon**. É de lá que vêm a foto e a avaliação.
+3. Em **Onde postar**, preencha as lojas em que o produto está à venda
+   (Amazon, Shopee, Mercado Livre, Magalu), cada uma com o **seu link de
+   afiliado** e o **preço POR** (preço DE e cupom são opcionais).
+   - Na Amazon o link pode ficar vazio se a `AMAZON_TAG` estiver no `.env`:
+     o robô monta o link de afiliado sozinho.
+   - Nas outras lojas, gere o link no app ou painel de afiliado da loja
+     ("compartilhar" ou "gerar link") e cole no campo.
+4. Toque em **Gerar peça** e acompanhe as etapas na tela (cerca de 15
+   segundos). Enquanto isso, você já pode colar o próximo link.
+5. Quando a peça ficar pronta, a imagem é a mesma para todas as lojas, e há
+   um botão **Copiar post** para cada loja preenchida (cada texto sai com o
+   link e o preço daquela loja). Use também **Copiar imagem**, **Baixar
+   imagem** ou, no celular, **Compartilhar**.
+6. Não gostou? **Gerar outra versão** faz uma nova, com outro cenário e
+   outra frase.
 
 O link do app é secreto: só entra quem tem o link. Não compartilhe.
 
@@ -57,6 +63,8 @@ o fundo das fotos. Isso acontece uma vez só.
      aleatório (o próprio `.env.exemplo` mostra como gerar).
    - `CANAL_ARROBA`: o @ do seu canal, que vira a marca d'água da peça.
      É opcional; sem ele a imagem sai sem marca d'água.
+   - `AMAZON_TAG`: sua etiqueta de afiliado da Amazon (ex.: `seunome-20`).
+     Opcional; com ela o app monta o link de afiliado da Amazon sozinho.
 
 Nunca compartilhe o `.env`: ele contém as suas chaves.
 
