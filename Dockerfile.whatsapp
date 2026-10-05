@@ -1,0 +1,24 @@
+# Ponte do WhatsApp (whatsapp/ponte.js): Node + Chromium do sistema.
+# O whatsapp-web.js abre o WhatsApp Web num Chromium sem tela.
+
+FROM node:22-bookworm-slim
+
+# Chromium e fontes com emoji (o WhatsApp Web precisa delas para renderizar).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium fonts-noto-color-emoji ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PUPPETEER_SKIP_DOWNLOAD=true \
+    CHROMIUM_PATH=/usr/bin/chromium \
+    PASTA_DADOS=/dados
+
+# A imagem do Node já tem o usuário comum "node" (id 1000), o mesmo id do
+# container do robô: os dois podem ler e escrever a pasta de dados.
+USER node
+WORKDIR /home/node/ponte
+
+COPY --chown=node whatsapp/package.json whatsapp/package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY --chown=node whatsapp/ponte.js ./
+CMD ["node", "ponte.js"]

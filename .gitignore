@@ -20,3 +20,8 @@ CONTEXTO.md
 
 # Configuração local do editor
 .claude/
+
+# Dados do robô automático (lista, sessão do WhatsApp, peças, histórico)
+dados/
+whatsapp/node_modules/
+lista.txt

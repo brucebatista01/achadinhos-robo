@@ -1,0 +1,28 @@
+# Robô automático de postagem (robo.py + ponte do WhatsApp).
+# Na VPS:  docker compose -f docker-compose.robo.yml up -d --build
+#
+# Nenhuma porta é aberta para a internet: o robô fala com a ponte só pela
+# rede interna do Docker.
+
+services:
+  robo:
+    build: .
+    command: ["python", "robo.py", "rodar"]
+    env_file: .env
+    environment:
+      PASTA_DADOS: /dados
+      URL_PONTE_WHATSAPP: http://whatsapp:3000
+    restart: unless-stopped
+    volumes:
+      - ./dados:/dados
+    depends_on:
+      - whatsapp
+
+  whatsapp:
+    build:
+      context: .
+      dockerfile: Dockerfile.whatsapp
+    restart: unless-stopped
+    # A sessão do WhatsApp (pareamento) e o QR ficam em ./dados.
+    volumes:
+      - ./dados:/dados

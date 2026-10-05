@@ -8,3 +8,5 @@ tests/
 .claude/
 __pycache__/
 CONTEXTO.md
+dados/
+whatsapp/node_modules/
