@@ -235,6 +235,8 @@ def metricas(token: str, request: Request, atualizar: bool = False) -> dict:
     nossos = {post["server_id"]: post for post in _ler_posts() if post.get("server_id")}
     posts = []
     for numeros in dados.get("posts", []):
+        if not numeros.get("legenda") and numeros["serverId"] not in nossos:
+            continue  # post apagado ou sem texto: não é oferta, não entra na conta
         nosso = nossos.get(numeros["serverId"]) or _ler_legenda(numeros.get("legenda") or "")
         posts.append({
             **numeros,
