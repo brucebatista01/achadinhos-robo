@@ -9,7 +9,7 @@
   "type": "commonjs",
   "dependencies": {
     "qrcode": "^1.5.4",
-    "whatsapp-web.js": "^1.34.7"
+    "whatsapp-web.js": "github:wwebjs/whatsapp-web.js#064a3d5a5a3dce1281a6a12740b5a7051339d154"
   },
   "private": true
 }
