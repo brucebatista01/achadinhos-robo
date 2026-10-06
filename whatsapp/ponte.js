@@ -31,6 +31,9 @@ const PORTA = Number(process.env.PORTA_PONTE || 3000);
 const ARQUIVO_QR = path.join(PASTA_DADOS, 'qr.png');
 
 let pronto = false;
+// Quando o WhatsApp pede pareamento (QR na tela), a ponte guarda o horário:
+// o painel usa isso para mostrar o QR e oferecer o código por número.
+let aguardandoPareamento = false;
 
 const cliente = new Client({
     // A sessão fica salva em disco: depois do primeiro pareamento, o número
@@ -47,13 +50,15 @@ const cliente = new Client({
 cliente.on('qr', async (qr) => {
     // Pareamento: o QR vira uma imagem para ser escaneada pelo celular em
     // "Aparelhos conectados". Também sai em texto no log, por garantia.
-    await QRCode.toFile(ARQUIVO_QR, qr, { width: 400 });
+    aguardandoPareamento = true;
+    await QRCode.toFile(ARQUIVO_QR, qr, { width: 400, margin: 2 });
     console.log(`QR novo salvo em ${ARQUIVO_QR}. Escaneie em WhatsApp > Aparelhos conectados.`);
     console.log(await QRCode.toString(qr, { type: 'terminal', small: true }));
 });
 
 cliente.on('ready', () => {
     pronto = true;
+    aguardandoPareamento = false;
     fs.rmSync(ARQUIVO_QR, { force: true });
     console.log(`WhatsApp conectado como ${cliente.info.wid.user}.`);
 });
@@ -62,7 +67,10 @@ cliente.on('disconnected', (motivo) => {
     // Sem conexão a ponte não serve para nada. Sair deixa o Docker
     // reiniciá-la (restart: unless-stopped), o que tenta reconectar.
     console.error(`WhatsApp desconectou: ${motivo}. Reiniciando a ponte.`);
-    process.exit(1);
+    // No "LOGOUT" (aparelho removido no celular) a biblioteca ainda apaga a
+    // sessão velha logo depois deste aviso; esperar um pouco garante que a
+    // ponte volte pedindo um QR novo, em vez de tentar a sessão morta.
+    setTimeout(() => process.exit(1), motivo === 'LOGOUT' ? 5000 : 0);
 });
 
 async function acharCanal(nomeOuId) {
@@ -177,8 +185,33 @@ async function metricasDoCanal(canal, limite) {
     }, canal.id._serialized, limite);
 }
 
+// Rotas que funcionam mesmo sem o WhatsApp conectado (servem para conectar).
+const ROTAS_DE_PAREAMENTO = new Set(['GET /status', 'POST /codigo']);
+
 const rotas = {
-    'GET /status': async () => ({ pronto, numero: pronto ? cliente.info.wid.user : null }),
+    'GET /status': async () => ({
+        pronto,
+        aguardandoPareamento,
+        numero: pronto ? cliente.info.wid.user : null,
+    }),
+
+    'POST /codigo': async ({ numero }) => {
+        // Alternativa ao QR: o WhatsApp mostra no celular um aviso e a pessoa
+        // digita este código de 8 letras em "Conectar com número de telefone".
+        const soDigitos = String(numero || '').replace(/\D/g, '');
+        if (soDigitos.length < 10) throw new Error('Número inválido: use DDI + DDD + número, ex. 5511999998888.');
+        if (pronto) throw new Error('O WhatsApp já está conectado.');
+        if (!aguardandoPareamento) throw new Error('A ponte ainda está iniciando. Tente de novo em alguns segundos.');
+        return { codigo: await cliente.requestPairingCode(soDigitos) };
+    },
+
+    'POST /desconectar': async () => {
+        // Troca de dono/número: desliga este aparelho e volta a pedir QR.
+        pronto = false;
+        await cliente.logout();
+        setTimeout(() => process.exit(1), 3000);
+        return { ok: true };
+    },
 
     'GET /canais': async () =>
         (await cliente.getChannels()).map((c) => ({ id: c.id._serialized, nome: c.name })),
@@ -220,7 +253,7 @@ http.createServer(async (req, res) => {
     if (!rota) {
         status = 404;
         resposta = { erro: 'rota não existe' };
-    } else if (!pronto && req.url !== '/status') {
+    } else if (!pronto && !ROTAS_DE_PAREAMENTO.has(`${req.method} ${req.url}`)) {
         status = 503;
         resposta = { erro: 'WhatsApp ainda não conectado (falta parear ou está iniciando)' };
     } else {

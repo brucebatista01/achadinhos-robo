@@ -186,6 +186,49 @@ def imagem(token: str, nome: str, request: Request) -> FileResponse:
 # API do painel
 # ---------------------------------------------------------------------- #
 
+@app.get("/p/{token}/api/whatsapp")
+def situacao_whatsapp(token: str, request: Request) -> dict:
+    _conferir_acesso(token, request)
+    situacao = whatsapp.situacao()
+    return {
+        "conectado": bool(situacao.get("pronto")),
+        "aguardando_pareamento": bool(situacao.get("aguardandoPareamento")),
+        "numero": situacao.get("numero"),
+        "tem_qr": (robo.PASTA_DADOS / "qr.png").exists(),
+    }
+
+
+@app.get("/p/{token}/qr.png")
+def qr(token: str, request: Request) -> FileResponse:
+    """O QR de pareamento que a ponte grava (muda a cada ~20 segundos)."""
+    _conferir_acesso(token, request)
+    caminho = robo.PASTA_DADOS / "qr.png"
+    if not caminho.exists():
+        raise HTTPException(status_code=404)
+    return FileResponse(caminho, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/p/{token}/api/whatsapp/codigo")
+async def codigo_whatsapp(token: str, request: Request) -> dict:
+    _conferir_acesso(token, request)
+    numero = str((await request.json()).get("numero", ""))
+    try:
+        return {"codigo": whatsapp.gerar_codigo(numero)}
+    except WhatsAppError as erro:
+        raise HTTPException(status_code=400, detail=str(erro)) from erro
+
+
+@app.post("/p/{token}/api/whatsapp/desconectar")
+def desconectar_whatsapp(token: str, request: Request) -> dict:
+    """Para trocar o número do canal: desliga o atual e volta a pedir QR."""
+    _conferir_acesso(token, request)
+    try:
+        whatsapp.desconectar()
+    except WhatsAppError as erro:
+        raise HTTPException(status_code=503, detail=str(erro)) from erro
+    return {"ok": True}
+
+
 @app.get("/p/{token}/api/resumo")
 def resumo(token: str, request: Request) -> dict:
     _conferir_acesso(token, request)

@@ -83,6 +83,38 @@
 
   <div class="aviso" id="aviso"></div>
 
+  <div class="cartao" id="conexao" style="margin-bottom:16px">
+    <h2>Conexão do WhatsApp</h2>
+    <div id="conexao-ok" style="display:none">
+      <p style="margin:0 0 10px">✅ Conectado ao número <b id="numero-conectado"></b>.</p>
+      <button id="botao-trocar">Trocar número</button>
+      <p class="nota">Use para colocar outro número no robô. O número atual sai do robô na hora.</p>
+    </div>
+    <div id="conexao-off" style="display:none">
+      <p style="margin:0 0 10px;color:var(--vermelho)"><b>O WhatsApp está desconectado.</b> O robô não posta até conectar de novo.</p>
+      <div class="linha2" style="margin:0">
+        <div>
+          <p style="margin:0 0 6px"><b>Opção 1: escanear o QR</b></p>
+          <ol class="nota" style="margin:0 0 8px;padding-left:18px">
+            <li>No celular do canal, abra o WhatsApp.</li>
+            <li>Toque em ⋮ (ou Configurações) e depois em <b>Aparelhos conectados</b>.</li>
+            <li>Toque em <b>Conectar aparelho</b> e aponte para o QR abaixo.</li>
+          </ol>
+          <img id="qr" alt="QR do WhatsApp" style="width:240px;max-width:100%;background:#fff;border-radius:8px;display:none">
+          <p class="nota" id="qr-espera">Gerando o QR… ele aparece aqui em alguns segundos.</p>
+        </div>
+        <div>
+          <p style="margin:0 0 6px"><b>Opção 2: conectar pelo número</b> (sem câmera)</p>
+          <label for="numero-wpp">Número do canal com DDI e DDD</label>
+          <input id="numero-wpp" placeholder="5511999998888" inputmode="numeric">
+          <div class="acoes" style="margin-top:8px"><button id="botao-codigo" class="principal">Gerar código</button></div>
+          <p id="codigo-wpp" style="font-size:28px;font-weight:700;letter-spacing:.2em;margin:10px 0 4px"></p>
+          <p class="nota">No celular: Aparelhos conectados → Conectar aparelho → <b>Conectar com número de telefone</b>, e digite o código.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="grade">
     <div class="cartao kpi"><div class="valor" id="k-seguidores">–</div><div class="rotulo">Seguidores do canal</div></div>
     <div class="cartao kpi"><div class="valor" id="k-hoje">–</div><div class="rotulo">Posts hoje</div></div>
@@ -261,6 +293,36 @@ $('botao-lista').onclick = async () => {
   } catch (e) { toast(e.message); }
 };
 
+async function carregarConexao() {
+  let c;
+  try { c = await api('whatsapp'); } catch (e) { return; }
+  $('conexao-ok').style.display = c.conectado ? 'block' : 'none';
+  $('conexao-off').style.display = c.conectado ? 'none' : 'block';
+  if (c.conectado) {
+    $('numero-conectado').textContent = '+' + c.numero;
+    $('codigo-wpp').textContent = '';
+  } else if (c.tem_qr) {
+    $('qr').src = base + 'qr.png?t=' + Date.now();
+    $('qr').style.display = 'block';
+    $('qr-espera').textContent = 'O QR muda sozinho a cada ~20 segundos; esta tela acompanha.';
+  } else {
+    $('qr').style.display = 'none';
+    $('qr-espera').textContent = 'Gerando o QR… ele aparece aqui em alguns segundos.';
+  }
+}
+$('botao-codigo').onclick = async () => {
+  try {
+    const r = await api('whatsapp/codigo', { method: 'POST', body: JSON.stringify({ numero: $('numero-wpp').value }) });
+    $('codigo-wpp').textContent = r.codigo.slice(0, 4) + '-' + r.codigo.slice(4);
+  } catch (e) { toast(e.message); }
+};
+$('botao-trocar').onclick = async () => {
+  if (!confirm('Desconectar este número do robô? Depois é só conectar o novo número pelo QR ou pelo código.')) return;
+  try { await api('whatsapp/desconectar', { method: 'POST' }); toast('Desconectado. O QR aparece em instantes.'); }
+  catch (e) { toast(e.message); }
+  setTimeout(carregarConexao, 4000);
+};
+
 $('botao-sair').onclick = async () => {
   await fetch(base + 'sair', { method: 'POST' });
   location.reload();
@@ -270,6 +332,8 @@ carregarResumo();
 carregarMetricas();
 carregarLista();
 setInterval(carregarResumo, 30000);
+carregarConexao();
+setInterval(carregarConexao, 5000);
 setInterval(() => carregarMetricas(true), 60000);
 $('botao-atualizar').onclick = () => carregarMetricas(true);
 </script>

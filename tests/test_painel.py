@@ -16,8 +16,24 @@ LINHA = "https://www.amazon.com.br/dp/AAAAAAAAAA | 10,00"
 
 
 class WhatsAppFalso:
+    conectado = True
+    desconectou = False
+
     def esta_pronto(self):
-        return True
+        return self.conectado
+
+    def situacao(self):
+        return {"pronto": self.conectado, "aguardandoPareamento": not self.conectado,
+                "numero": "5511933771685" if self.conectado else None}
+
+    def gerar_codigo(self, numero):
+        if len(numero) < 10:
+            from services.whatsapp_service import WhatsAppError
+            raise WhatsAppError("Número inválido")
+        return "ABCD1234"
+
+    def desconectar(self):
+        self.desconectou = True
 
     def metricas(self, canal, limite=60):
         return {
@@ -40,6 +56,7 @@ def cliente(tmp_path, monkeypatch):
     }.items():
         monkeypatch.setattr(robo, nome, tmp_path / arquivo)
     monkeypatch.setattr(robo, "PASTA_PECAS", tmp_path / "output")
+    monkeypatch.setattr(robo, "PASTA_DADOS", tmp_path)
     (tmp_path / "output").mkdir()
     monkeypatch.setenv("PAINEL_TOKEN", TOKEN)
     monkeypatch.setenv("PAINEL_PIN", PIN)
@@ -152,3 +169,35 @@ def test_imagem_nao_sai_da_pasta_das_pecas(cliente):
     assert cliente.get(url("imagem/..%2F.env")).status_code == 404
     (robo.PASTA_PECAS / "X_final.png").write_bytes(b"png")
     assert cliente.get(url("imagem/X_final.png")).status_code == 200
+
+
+# ---------------------------------------------------------------- conexão do WhatsApp
+
+
+def test_situacao_do_whatsapp_conectado(cliente):
+    dados = cliente.get(url("api/whatsapp")).json()
+    assert dados["conectado"] is True
+    assert dados["numero"] == "5511933771685"
+
+
+def test_qr_aparece_quando_desconectado(cliente):
+    painel.whatsapp.conectado = False
+    (robo.PASTA_DADOS / "qr.png").write_bytes(b"png")
+    assert cliente.get(url("api/whatsapp")).json()["tem_qr"] is True
+    assert cliente.get(url("qr.png")).content == b"png"
+
+
+def test_qr_e_codigo_exigem_pin(cliente):
+    cliente.cookies.clear()
+    assert cliente.get(url("qr.png")).status_code == 401
+    assert cliente.post(url("api/whatsapp/codigo"), json={"numero": "5511999998888"}).status_code == 401
+
+
+def test_codigo_por_numero(cliente):
+    assert cliente.post(url("api/whatsapp/codigo"), json={"numero": "5511999998888"}).json()["codigo"] == "ABCD1234"
+    assert cliente.post(url("api/whatsapp/codigo"), json={"numero": "123"}).status_code == 400
+
+
+def test_trocar_numero(cliente):
+    assert cliente.post(url("api/whatsapp/desconectar")).status_code == 200
+    assert painel.whatsapp.desconectou

@@ -50,6 +50,24 @@ class WhatsAppService:
         except WhatsAppError:
             return False
 
+    def situacao(self) -> dict:
+        """
+        {pronto, aguardandoPareamento, numero}. Nunca lança erro: ponte fora
+        do ar aparece como "não pronto", que é o que o painel precisa mostrar.
+        """
+        try:
+            return self._chamar("GET", "/status")
+        except WhatsAppError:
+            return {"pronto": False, "aguardandoPareamento": False, "numero": None}
+
+    def gerar_codigo(self, numero: str) -> str:
+        """Código de 8 letras para conectar pelo número, sem escanear QR."""
+        return self._chamar("POST", "/codigo", {"numero": numero})["codigo"]
+
+    def desconectar(self) -> None:
+        """Remove este aparelho do WhatsApp; a ponte volta pedindo QR."""
+        self._chamar("POST", "/desconectar")
+
     def listar_canais(self) -> list[dict]:
         return self._chamar("GET", "/canais")
 
