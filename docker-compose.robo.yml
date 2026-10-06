@@ -28,10 +28,14 @@ services:
     restart: unless-stopped
     volumes:
       - ./dados:/dados
-    # Só a própria VPS enxerga esta porta (127.0.0.1). O acesso de fora
-    # passa pelo servidor de sites com HTTPS, nunca direto.
-    ports:
-      - "127.0.0.1:8090:8000"
+    # O acesso de fora passa pelo Caddy (HTTPS) do app web, que fica na rede
+    # "achadinhos_default". O painel entra nessa rede com o nome
+    # "painel-robo"; nenhuma porta é aberta direto para a internet.
+    networks:
+      default:
+      site:
+        aliases:
+          - painel-robo
     depends_on:
       - whatsapp
 
@@ -43,3 +47,8 @@ services:
     # A sessão do WhatsApp (pareamento) e o QR ficam em ./dados.
     volumes:
       - ./dados:/dados
+
+networks:
+  site:
+    name: achadinhos_default
+    external: true

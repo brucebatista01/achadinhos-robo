@@ -19,6 +19,8 @@ config, pedido de "postar agora", lista) que o robô (robo.py) relê a cada
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -30,7 +32,7 @@ from pathlib import Path
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 import robo
 from services.whatsapp_service import WhatsAppError, WhatsAppService
@@ -42,9 +44,16 @@ PASTA_WEB = Path(__file__).parent / "painel_web"
 # não deve ficar pedindo tudo de novo ao WhatsApp.
 SEGUNDOS_CACHE_METRICAS = 120
 
+# Errar o PIN 5 vezes bloqueia novas tentativas daquele endereço por 15 min:
+# um PIN curto não aguenta um robô testando milhares de combinações.
+TENTATIVAS_MAXIMAS = 5
+SEGUNDOS_BLOQUEIO = 15 * 60
+COOKIE = "painel_sessao"
+
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 whatsapp = WhatsAppService()
 _cache_metricas: dict = {"quando": 0.0, "dados": None}
+_erros_de_pin: dict[str, list[float]] = {}
 
 
 def _conferir_token(token: str) -> None:
@@ -53,6 +62,34 @@ def _conferir_token(token: str) -> None:
     # para descobrir o código letra por letra medindo o tempo de resposta.
     if len(esperado) < 16 or not secrets.compare_digest(token, esperado):
         raise HTTPException(status_code=404)
+
+
+def _assinatura_da_sessao() -> str:
+    """
+    O valor do "crachá" (cookie) de quem acertou o PIN.
+
+    É uma assinatura do PIN feita com o código secreto do link: não dá para
+    fabricar sem conhecer os dois, e trocar o PIN ou o link no .env derruba
+    todo mundo que estava dentro.
+    """
+    chave = os.getenv("PAINEL_TOKEN", "").encode()
+    return hmac.new(chave, os.getenv("PAINEL_PIN", "").encode(), hashlib.sha256).hexdigest()
+
+
+def _conferir_acesso(token: str, request: Request) -> None:
+    """Link certo E PIN já digitado (cookie válido). Sem isso, nada passa."""
+    _conferir_token(token)
+    if not os.getenv("PAINEL_PIN"):
+        return  # sem PIN configurado, o link sozinho dá acesso
+    if not secrets.compare_digest(request.cookies.get(COOKIE, ""), _assinatura_da_sessao()):
+        raise HTTPException(status_code=401, detail="Digite o PIN.")
+
+
+def _bloqueado(endereco: str) -> bool:
+    agora_ = time.time()
+    recentes = [t for t in _erros_de_pin.get(endereco, []) if agora_ - t < SEGUNDOS_BLOQUEIO]
+    _erros_de_pin[endereco] = recentes
+    return len(recentes) >= TENTATIVAS_MAXIMAS
 
 
 def _canal() -> str:
@@ -98,14 +135,45 @@ def _ler_legenda(legenda: str) -> dict:
 # ---------------------------------------------------------------------- #
 
 @app.get("/p/{token}/", response_class=HTMLResponse)
-def pagina(token: str) -> str:
+def pagina(token: str, request: Request) -> str:
     _conferir_token(token)
+    try:
+        _conferir_acesso(token, request)
+    except HTTPException:
+        return (PASTA_WEB / "pin.html").read_text(encoding="utf-8")
     return (PASTA_WEB / "index.html").read_text(encoding="utf-8")
 
 
-@app.get("/p/{token}/imagem/{nome}")
-def imagem(token: str, nome: str) -> FileResponse:
+@app.post("/p/{token}/entrar")
+async def entrar(token: str, request: Request) -> JSONResponse:
     _conferir_token(token)
+    endereco = request.headers.get("x-forwarded-for", request.client.host if request.client else "?").split(",")[0]
+    if _bloqueado(endereco):
+        raise HTTPException(status_code=429, detail="Muitas tentativas erradas. Espere 15 minutos.")
+    pin = str((await request.json()).get("pin", "")).strip().upper()
+    if not secrets.compare_digest(pin, os.getenv("PAINEL_PIN", "").upper()):
+        _erros_de_pin.setdefault(endereco, []).append(time.time())
+        raise HTTPException(status_code=403, detail="PIN errado.")
+    resposta = JSONResponse({"ok": True})
+    resposta.set_cookie(
+        COOKIE, _assinatura_da_sessao(), max_age=30 * 24 * 3600, httponly=True,
+        samesite="strict", secure=request.headers.get("x-forwarded-proto") == "https",
+        path=f"/p/{token}/",
+    )
+    return resposta
+
+
+@app.post("/p/{token}/sair")
+def sair(token: str) -> JSONResponse:
+    _conferir_token(token)
+    resposta = JSONResponse({"ok": True})
+    resposta.delete_cookie(COOKIE, path=f"/p/{token}/")
+    return resposta
+
+
+@app.get("/p/{token}/imagem/{nome}")
+def imagem(token: str, nome: str, request: Request) -> FileResponse:
+    _conferir_acesso(token, request)
     caminho = (robo.PASTA_PECAS / nome).resolve()
     # Só entrega arquivos de dentro da pasta das peças (nada de "../.env").
     if caminho.parent != robo.PASTA_PECAS.resolve() or not caminho.is_file():
@@ -118,8 +186,8 @@ def imagem(token: str, nome: str) -> FileResponse:
 # ---------------------------------------------------------------------- #
 
 @app.get("/p/{token}/api/resumo")
-def resumo(token: str) -> dict:
-    _conferir_token(token)
+def resumo(token: str, request: Request) -> dict:
+    _conferir_acesso(token, request)
     estado, config = robo.Estado.carregar(), robo.Config.carregar()
     posts = _ler_posts()
     hoje = robo.agora().date().isoformat()
@@ -145,12 +213,12 @@ def resumo(token: str) -> dict:
 
 
 @app.get("/p/{token}/api/metricas")
-def metricas(token: str, atualizar: bool = False) -> dict:
+def metricas(token: str, request: Request, atualizar: bool = False) -> dict:
     """
     Junta o que o WhatsApp sabe (visualizações, reações) com o que o robô
     sabe (qual produto foi em cada post) e calcula os destaques.
     """
-    _conferir_token(token)
+    _conferir_acesso(token, request)
     agora_ = time.time()
     if atualizar or _cache_metricas["dados"] is None or agora_ - _cache_metricas["quando"] > SEGUNDOS_CACHE_METRICAS:
         try:
@@ -207,8 +275,8 @@ def _destaques(posts: list[dict]) -> dict:
 
 
 @app.post("/p/{token}/api/ligar")
-def ligar(token: str) -> dict:
-    _conferir_token(token)
+def ligar(token: str, request: Request) -> dict:
+    _conferir_acesso(token, request)
     estado = robo.Estado.carregar()
     estado.ligado, estado.motivo = True, ""
     estado.salvar()
@@ -216,8 +284,8 @@ def ligar(token: str) -> dict:
 
 
 @app.post("/p/{token}/api/desligar")
-def desligar(token: str) -> dict:
-    _conferir_token(token)
+def desligar(token: str, request: Request) -> dict:
+    _conferir_acesso(token, request)
     estado = robo.Estado.carregar()
     estado.ligado, estado.motivo = False, ""
     estado.salvar()
@@ -225,15 +293,15 @@ def desligar(token: str) -> dict:
 
 
 @app.post("/p/{token}/api/postar-agora")
-def postar_agora(token: str) -> dict:
-    _conferir_token(token)
+def postar_agora(token: str, request: Request) -> dict:
+    _conferir_acesso(token, request)
     robo.ARQUIVO_POSTAR_AGORA.touch()
     return {"ok": True, "aviso": "O post sai em até 1 minuto."}
 
 
 @app.post("/p/{token}/api/config")
 async def salvar_config(token: str, request: Request) -> dict:
-    _conferir_token(token)
+    _conferir_acesso(token, request)
     corpo = await request.json()
     try:
         config = robo.Config(
@@ -248,8 +316,8 @@ async def salvar_config(token: str, request: Request) -> dict:
 
 
 @app.get("/p/{token}/api/lista")
-def ler_lista_texto(token: str) -> dict:
-    _conferir_token(token)
+def ler_lista_texto(token: str, request: Request) -> dict:
+    _conferir_acesso(token, request)
     texto = robo.ARQUIVO_LISTA.read_text(encoding="utf-8") if robo.ARQUIVO_LISTA.exists() else ""
     return {"texto": texto}
 
@@ -257,7 +325,7 @@ def ler_lista_texto(token: str) -> dict:
 @app.post("/p/{token}/api/lista")
 async def salvar_lista(token: str, request: Request) -> dict:
     """Confere a lista inteira antes de gravar: lista com erro não substitui a boa."""
-    _conferir_token(token)
+    _conferir_acesso(token, request)
     texto = (await request.json()).get("texto", "")
     provisoria = robo.ARQUIVO_LISTA.with_suffix(".novo")
     provisoria.write_text(texto, encoding="utf-8")

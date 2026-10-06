@@ -77,6 +77,7 @@
       <span class="selo" id="selo"><span class="bolinha"></span><span id="selo-texto">…</span></span>
       <button id="botao-ligar" class="principal">Ligar</button>
       <button id="botao-agora">Postar agora</button>
+      <button id="botao-sair" title="Sair do painel">Sair</button>
     </div>
   </div>
 
@@ -150,6 +151,7 @@ async function api(caminho, opcoes = {}) {
     headers: { 'Content-Type': 'application/json' }, ...opcoes,
   });
   const dados = await r.json().catch(() => ({}));
+  if (r.status === 401) { location.reload(); throw new Error('Digite o PIN.'); }
   if (!r.ok) throw new Error(dados.detail || 'Erro ' + r.status);
   return dados;
 }
@@ -247,6 +249,11 @@ $('botao-lista').onclick = async () => {
     const r = await api('lista', { method: 'POST', body: JSON.stringify({ texto: $('lista').value }) });
     toast(`Lista salva: ${r.produtos} produtos`); carregarResumo();
   } catch (e) { toast(e.message); }
+};
+
+$('botao-sair').onclick = async () => {
+  await fetch(base + 'sair', { method: 'POST' });
+  location.reload();
 };
 
 carregarResumo();

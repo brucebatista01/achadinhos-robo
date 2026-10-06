@@ -11,6 +11,7 @@ import painel
 import robo
 
 TOKEN = "codigo-secreto-de-teste-123"
+PIN = "DAN2026"
 LINHA = "https://www.amazon.com.br/dp/AAAAAAAAAA | 10,00"
 
 
@@ -41,11 +42,15 @@ def cliente(tmp_path, monkeypatch):
     monkeypatch.setattr(robo, "PASTA_PECAS", tmp_path / "output")
     (tmp_path / "output").mkdir()
     monkeypatch.setenv("PAINEL_TOKEN", TOKEN)
+    monkeypatch.setenv("PAINEL_PIN", PIN)
+    painel._erros_de_pin.clear()
     monkeypatch.setenv("WHATSAPP_CANAL", "Canal Teste")
     monkeypatch.setattr(painel, "whatsapp", WhatsAppFalso())
     monkeypatch.setitem(painel._cache_metricas, "dados", None)
     (tmp_path / "lista.txt").write_text(LINHA + "\n", encoding="utf-8")
-    return TestClient(painel.app)
+    cliente = TestClient(painel.app)
+    assert cliente.post(url("entrar"), json={"pin": PIN}).status_code == 200
+    return cliente
 
 
 def url(caminho: str) -> str:
@@ -61,6 +66,32 @@ def test_link_errado_parece_que_nao_existe(cliente):
 def test_token_curto_demais_nao_abre_nada(cliente, monkeypatch):
     monkeypatch.setenv("PAINEL_TOKEN", "curto")
     assert cliente.get("/p/curto/").status_code == 404
+
+
+def test_sem_pin_mostra_tela_de_pin_e_api_fechada(cliente):
+    cliente.cookies.clear()
+    assert "Digite o PIN" in cliente.get(url("")).text
+    assert cliente.get(url("api/resumo")).status_code == 401
+    assert cliente.post(url("api/ligar")).status_code == 401
+
+
+def test_pin_errado_e_bloqueio(cliente):
+    cliente.cookies.clear()
+    for _ in range(painel.TENTATIVAS_MAXIMAS):
+        assert cliente.post(url("entrar"), json={"pin": "ERRADO"}).status_code == 403
+    # Bloqueado: nem o PIN certo entra até o tempo passar.
+    assert cliente.post(url("entrar"), json={"pin": PIN}).status_code == 429
+
+
+def test_pin_aceita_minusculas(cliente):
+    cliente.cookies.clear()
+    assert cliente.post(url("entrar"), json={"pin": "dan2026"}).status_code == 200
+    assert cliente.get(url("api/resumo")).status_code == 200
+
+
+def test_trocar_o_pin_derruba_quem_estava_dentro(cliente, monkeypatch):
+    monkeypatch.setenv("PAINEL_PIN", "NOVO123")
+    assert cliente.get(url("api/resumo")).status_code == 401
 
 
 def test_pagina_abre_com_o_link_certo(cliente):
