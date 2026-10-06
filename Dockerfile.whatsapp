@@ -19,7 +19,7 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true \
 USER node
 WORKDIR /home/node/ponte
 
-COPY --chown=node whatsapp/package.json whatsapp/package-lock.json ./
+COPY --chown=node whatsapp/package.json whatsapp/package-lock.json whatsapp/corrigir_biblioteca.js ./
 RUN npm ci --omit=dev
 
 COPY --chown=node whatsapp/ponte.js ./

@@ -4,7 +4,8 @@
   "description": "Ponte entre o robô de achadinhos e o WhatsApp Web",
   "main": "ponte.js",
   "scripts": {
-    "start": "node ponte.js"
+    "start": "node ponte.js",
+    "postinstall": "node corrigir_biblioteca.js"
   },
   "type": "commonjs",
   "dependencies": {
