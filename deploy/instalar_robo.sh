@@ -7,18 +7,14 @@
 
 set -euo pipefail
 
-REPOSITORIO="https://github.com/brucebatista01/sistema-achadinhos.git"
-RAMO="claude/project-thread-cnqooq"
 PASTA="/opt/achadinhos-robo"
 COMPOSE="docker compose -f $PASTA/docker-compose.robo.yml"
 
-echo "==> Baixando o código"
-if [ -d "$PASTA/.git" ]; then
-  git -C "$PASTA" fetch -q origin "$RAMO"
-  git -C "$PASTA" checkout -q "$RAMO"
-  git -C "$PASTA" reset -q --hard "origin/$RAMO"
-else
-  git clone -q -b "$RAMO" "$REPOSITORIO" "$PASTA"
+# O código chega pelo publicar.ps1 (do PC, pasta E:\Danilo2), sem passar
+# pelo repositório do projeto antigo.
+if [ ! -f "$PASTA/robo.py" ]; then
+  echo "Código não encontrado em $PASTA. Rode o publicar.ps1 no PC." >&2
+  exit 1
 fi
 cd "$PASTA"
 
