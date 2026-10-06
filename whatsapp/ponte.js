@@ -75,17 +75,40 @@ async function acharCanal(nomeOuId) {
     return canal;
 }
 
+async function etiquetarComoIA(canalId, mensagemId) {
+    /*
+     * O mesmo que fazer à mão: segurar o post > ⋮ > "Adicionar etiqueta de
+     * conteúdo de IA" > "Adicionar etiqueta". O WhatsApp pede essa etiqueta
+     * em post feito com IA, e as nossas imagens e chamadas são.
+     *
+     * A biblioteca não tem isso pronto, então chamamos a mesma ação interna
+     * que o botão do WhatsApp Web chama. Ela precisa do número que o servidor
+     * deu ao post (serverId), que só chega um pouco depois do envio.
+     */
+    return cliente.pupPage.evaluate(async (canalId, mensagemId) => {
+        const msg = window.require('WAWebCollections').Msg.get(mensagemId);
+        for (let tentativa = 0; msg && msg.serverId == null && tentativa < 20; tentativa++) {
+            await new Promise((r) => setTimeout(r, 500));
+        }
+        if (!msg || msg.serverId == null) return false;
+        const acao = window.require('WAWebNewsletterAddAiContentLabelAction');
+        return (await acao.WAWebNewsletterAddAiContentLabelAction(canalId, String(msg.serverId), 'MESSAGE')) === true;
+    }, canalId, mensagemId);
+}
+
 const rotas = {
     'GET /status': async () => ({ pronto, numero: pronto ? cliente.info.wid.user : null }),
 
     'GET /canais': async () =>
         (await cliente.getChannels()).map((c) => ({ id: c.id._serialized, nome: c.name })),
 
-    'POST /postar': async ({ canal, imagem, texto }) => {
+    'POST /postar': async ({ canal, imagem, texto, etiquetaIA = true }) => {
         const destino = await acharCanal(canal);
         const midia = MessageMedia.fromFilePath(imagem);
         const mensagem = await destino.sendMessage(midia, { caption: texto });
-        return { ok: true, id: mensagem && mensagem.id ? mensagem.id._serialized : null };
+        const id = mensagem && mensagem.id ? mensagem.id._serialized : null;
+        const rotulado = etiquetaIA && id ? await etiquetarComoIA(destino.id._serialized, id) : false;
+        return { ok: true, id, etiquetaIA: rotulado };
     },
 
     'POST /avisar': async ({ texto }) => {

@@ -32,6 +32,7 @@ class WhatsAppFalso:
         if self.falhar:
             raise WhatsAppError("sem conexão")
         self.posts.append((canal, imagem, texto))
+        return True
 
     def avisar(self, texto):
         self.avisos.append(texto)

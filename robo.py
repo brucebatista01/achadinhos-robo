@@ -198,9 +198,11 @@ class Robo:
         except ERROS_DO_PIPELINE as erro:
             raise RoboError(f"Falhou ao gerar a peça de:\n{linha}\nMotivo: {erro}") from erro
         try:
-            self.whatsapp.postar(self.canal, imagem, texto)
+            com_etiqueta = self.whatsapp.postar(self.canal, imagem, texto)
         except WhatsAppError as erro:
             raise RoboError(f"Falhou ao postar no WhatsApp: {erro}") from erro
+        if not com_etiqueta:
+            log.warning("  Post sem a etiqueta de IA (o WhatsApp não aceitou). Marque à mão.")
 
         registrar_post(linha)
         # Relê o estado antes de gravar: alguém pode ter desligado o robô
