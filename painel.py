@@ -75,6 +75,24 @@ def _link_do_post(linha: str) -> str:
     return linha.split("|")[0].strip()
 
 
+def _ler_legenda(legenda: str) -> dict:
+    """
+    Para posts sem registro do robô (feitos antes do painel existir, ou à
+    mão), tira produto e link do próprio texto do post, que segue o padrão
+    "✅ Nome" e "🔗 link".
+    """
+    produto = next((l[1:].strip() for l in legenda.splitlines() if l.startswith("✅")), None)
+    link = next((l[1:].strip() for l in legenda.splitlines() if l.startswith("🔗")), "")
+    asin = link.split("/dp/")[1][:10] if "/dp/" in link else None
+    imagem = f"{asin}_final.png" if asin and (robo.PASTA_PECAS / f"{asin}_final.png").exists() else None
+    return {
+        "produto": produto or (legenda.split("\n")[0][:60] or "Post"),
+        "asin": asin,
+        "imagem": imagem,
+        "linha": link.split("?")[0] if link else None,
+    }
+
+
 # ---------------------------------------------------------------------- #
 # Páginas
 # ---------------------------------------------------------------------- #
@@ -146,14 +164,14 @@ def metricas(token: str, atualizar: bool = False) -> dict:
     nossos = {post["server_id"]: post for post in _ler_posts() if post.get("server_id")}
     posts = []
     for numeros in dados.get("posts", []):
-        nosso = nossos.get(numeros["serverId"], {})
+        nosso = nossos.get(numeros["serverId"]) or _ler_legenda(numeros.get("legenda") or "")
         posts.append({
             **numeros,
-            "produto": nosso.get("produto") or (numeros.get("legenda") or "").split("\n")[0][:60],
+            "produto": nosso.get("produto"),
             "asin": nosso.get("asin"),
             "imagem": nosso.get("imagem"),
             "link": _link_do_post(nosso["linha"]) if nosso.get("linha") else None,
-            "do_robo": bool(nosso),
+            "do_robo": "server_id" in nosso,
         })
     posts.sort(key=lambda post: post["quando"], reverse=True)
     return {
