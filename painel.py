@@ -40,9 +40,10 @@ from services.whatsapp_service import WhatsAppError, WhatsAppService
 load_dotenv()
 
 PASTA_WEB = Path(__file__).parent / "painel_web"
-# Números do WhatsApp guardados por 2 minutos: abrir o painel várias vezes
-# não deve ficar pedindo tudo de novo ao WhatsApp.
-SEGUNDOS_CACHE_METRICAS = 120
+# Números do WhatsApp guardados por 20 segundos: o painel atualiza sozinho a
+# cada minuto, e abrir em várias abas ao mesmo tempo não multiplica os
+# pedidos ao WhatsApp.
+SEGUNDOS_CACHE_METRICAS = 20
 
 # Errar o PIN 5 vezes bloqueia novas tentativas daquele endereço por 15 min:
 # um PIN curto não aguenta um robô testando milhares de combinações.
@@ -227,6 +228,8 @@ def metricas(token: str, request: Request, atualizar: bool = False) -> dict:
         except WhatsAppError as erro:
             if _cache_metricas["dados"] is None:
                 raise HTTPException(status_code=503, detail=f"WhatsApp indisponível: {erro}") from erro
+            # Mostra os últimos números que deram certo, avisando que são velhos.
+            _cache_metricas["dados"] = {**_cache_metricas["dados"], "erroServidor": str(erro)}
     dados = _cache_metricas["dados"]
 
     nossos = {post["server_id"]: post for post in _ler_posts() if post.get("server_id")}
@@ -244,7 +247,8 @@ def metricas(token: str, request: Request, atualizar: bool = False) -> dict:
     posts.sort(key=lambda post: post["quando"], reverse=True)
     return {
         "seguidores": dados.get("seguidores"),
-        "atualizado_em": datetime.fromtimestamp(_cache_metricas["quando"], robo.BRASILIA).strftime("%H:%M"),
+        "atualizado_em": datetime.fromtimestamp(_cache_metricas["quando"], robo.BRASILIA).strftime("%H:%M:%S"),
+        "aviso": "O WhatsApp não respondeu agora; números podem estar atrasados." if dados.get("erroServidor") else None,
         "posts": posts,
         "destaques": _destaques(posts),
     }

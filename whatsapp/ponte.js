@@ -102,9 +102,10 @@ async function metricasDoCanal(canal, limite) {
      * Números para o painel: seguidores do canal e, de cada post recente,
      * visualizações, reações e encaminhamentos.
      *
-     * Carregar as mensagens faz o WhatsApp Web buscar no servidor os números
-     * atualizados de cada post (é o que acontece quando o dono abre o canal).
-     * Os seguidores vêm da mesma consulta que a tela "Informações do canal" usa.
+     * Os números que ficam guardados no WhatsApp Web só se renovam quando
+     * alguém abre o canal na tela, e a ponte não tem tela. Por isso pedimos
+     * os números direto ao servidor do WhatsApp, com a mesma consulta que o
+     * WhatsApp Web usa ("message_updates"), toda vez que o painel atualiza.
      */
     await canal.fetchMessages({ limit: limite, fromMe: true });
     return cliente.pupPage.evaluate(async (jid, limite) => {
@@ -112,14 +113,46 @@ async function metricasDoCanal(canal, limite) {
         const msgs = chat.msgs.getModelsArray()
             .filter((m) => m.serverId != null && m.serverId < 1e9 && m.type !== 'newsletter_notification')
             .slice(-limite);
-        try {
-            // Pede ao servidor os números novos (com limite de tempo: se o
-            // WhatsApp demorar, ficamos com os números que já estão na tela).
-            await Promise.race([
-                new Promise((r) => setTimeout(r, 15000)),
-                window.require('WAWebNewsletterGetMessageUpdatesAction').maybeUpdateMsgsAddOns(msgs, chat),
-            ]);
-        } catch (e) { /* números da última carga continuam valendo */ }
+
+        // Soma todos os "count" dentro de um pedaço da resposta do servidor
+        // (o formato das reações muda de tempos em tempos; somar é robusto).
+        const somarContagens = (valor) => {
+            if (!valor || typeof valor !== 'object') return 0;
+            let total = 0;
+            for (const [chave, item] of Object.entries(valor)) {
+                if (chave === 'count' && Number.isFinite(Number(item))) total += Number(item);
+                else total += somarContagens(item);
+            }
+            return total;
+        };
+
+        const doServidor = {};
+        let erroServidor = null;
+        if (msgs.length) {
+            const inicio = Math.min(...msgs.map((m) => m.serverId));
+            try {
+                const resposta = await Promise.race([
+                    new Promise((_, rejeitar) => setTimeout(() => rejeitar(new Error('demorou demais')), 20000)),
+                    window.require('WASmaxNewslettersGetNewsletterMessageUpdatesRPC').sendGetNewsletterMessageUpdatesRPC({
+                        iqTo: jid,
+                        messageUpdatesCount: Math.min(100, msgs.length + 5),
+                        messageUpdatesBeforeOrAfterMixinMixinGroupArgs: {
+                            messageUpdatesAfterMixin: { messageUpdatesAfter: inicio - 1 },
+                        },
+                    }),
+                ]);
+                const lista = resposta.value?.messageUpdatesMessagesNewsletterMessageResponsePayloadMixin?.message || [];
+                for (const item of lista) {
+                    doServidor[item.serverId] = {
+                        visualizacoes: somarContagens(item.newsletterViewsCountViewsOrDeprecatedMixinGroup),
+                        reacoes: somarContagens(item.newsletterReactionsMixin),
+                        encaminhamentos: somarContagens(item.newsletterForwardsCountMixin),
+                    };
+                }
+            } catch (e) {
+                erroServidor = String((e && e.message) || e);
+            }
+        }
 
         let seguidores = null;
         try {
@@ -128,27 +161,19 @@ async function metricasDoCanal(canal, limite) {
             seguidores = meta.newsletterSubscribersMetadataMixin.subscribersCount;
         } catch (e) { /* segue sem o número de seguidores */ }
 
-        const posts = [];
-        for (const m of msgs) {
-            let reacoes = 0;
-            if (m.hasReaction) {
-                try {
-                    const r = await window.require('WAWebCollections').Reactions.find(m.id);
-                    for (const grupo of (r && r.reactions ? r.reactions.serialize() : [])) {
-                        reacoes += grupo.senders ? grupo.senders.length : 1;
-                    }
-                } catch (e) { reacoes = 1; }
-            }
-            posts.push({
-                serverId: m.serverId,
-                quando: m.t,
-                legenda: (m.caption || m.body || '').slice(0, 300),
+        const posts = msgs.map((m) => ({
+            serverId: m.serverId,
+            quando: m.t,
+            legenda: (m.caption || m.body || '').slice(0, 300),
+            // Sem resposta do servidor, ficam os números guardados (podem estar velhos).
+            ...(doServidor[m.serverId] || {
                 visualizacoes: m.viewCount || 0,
-                reacoes,
+                reacoes: m.hasReaction ? 1 : 0,
                 encaminhamentos: m.forwardsCount || 0,
-            });
-        }
-        return { seguidores, posts };
+            }),
+            atualizado: Boolean(doServidor[m.serverId]),
+        }));
+        return { seguidores, posts, erroServidor };
     }, canal.id._serialized, limite);
 }
 

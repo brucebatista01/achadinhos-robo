@@ -98,7 +98,7 @@
       <div class="eixo"><span>mais antigo</span><span>mais recente</span></div>
     </div>
     <div class="cartao">
-      <h2>Destaques</h2>
+      <h2>Destaques <button id="botao-atualizar" style="float:right;font-size:12px;padding:4px 10px">Atualizar números</button></h2>
       <ul class="destaque" id="destaques"><li>Carregando…</li></ul>
     </div>
   </div>
@@ -187,10 +187,20 @@ async function carregarResumo() {
   } else aviso.style.display = 'none';
 }
 
+let carregandoMetricas = false;
 async function carregarMetricas(atualizar = false) {
+  if (carregandoMetricas) return;
+  carregandoMetricas = true;
+  $('botao-atualizar').disabled = true;
+  $('botao-atualizar').textContent = 'Atualizando…';
   let m;
   try { m = await api('metricas' + (atualizar ? '?atualizar=true' : '')); }
   catch (e) { $('destaques').innerHTML = `<li>${escapar(e.message)}</li>`; return; }
+  finally {
+    carregandoMetricas = false;
+    $('botao-atualizar').disabled = false;
+    $('botao-atualizar').textContent = 'Atualizar números';
+  }
   $('k-seguidores').textContent = m.seguidores ?? '–';
   const d = m.destaques || {};
   $('k-media').textContent = d.media_visualizacoes ?? '–';
@@ -209,9 +219,9 @@ async function carregarMetricas(atualizar = false) {
     if (p) itens.push(`<li>🏆 ${escapar(p.produto)}: <b>${p.visualizacoes}</b> visualiz.</li>`);
   }
   if (d.total_encaminhamentos) itens.push(`<li>${d.total_encaminhamentos} encaminhamentos nos posts recentes</li>`);
-  itens.push(`<li class="sub">Números do WhatsApp às ${escapar(m.atualizado_em)} · <a href="#" id="atualizar">atualizar</a></li>`);
+  if (m.aviso) itens.push(`<li style="color:var(--vermelho)">${escapar(m.aviso)}</li>`);
+  itens.push(`<li class="sub">Números do WhatsApp às ${escapar(m.atualizado_em)} (atualiza sozinho a cada minuto)</li>`);
   $('destaques').innerHTML = itens.join('');
-  $('atualizar').onclick = (e) => { e.preventDefault(); carregarMetricas(true); };
 
   $('posts').innerHTML = m.posts.length ? m.posts.slice(0, 60).map((p) => {
     const quando = new Date(p.quando * 1000).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -260,7 +270,8 @@ carregarResumo();
 carregarMetricas();
 carregarLista();
 setInterval(carregarResumo, 30000);
-setInterval(carregarMetricas, 120000);
+setInterval(() => carregarMetricas(true), 60000);
+$('botao-atualizar').onclick = () => carregarMetricas(true);
 </script>
 </body>
 </html>
