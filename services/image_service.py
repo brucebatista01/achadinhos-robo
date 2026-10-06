@@ -18,10 +18,9 @@ import numpy as np
 import onnxruntime
 import requests
 from dotenv import load_dotenv
-from PIL import Image, ImageDraw
+from PIL import Image
 from rembg import new_session, remove
-from scipy.ndimage import binary_erosion, binary_fill_holes, binary_opening, label
-from scipy.spatial import ConvexHull
+from scipy.ndimage import binary_fill_holes
 
 # Carrega as variáveis do arquivo .env (as chaves de API).
 load_dotenv()
@@ -127,82 +126,7 @@ class ImageService:
             imagem = Image.open(io.BytesIO(resultado)).convert("RGBA")
         except Exception as erro:
             raise ImageError(f"Falha ao remover o fundo: {erro}") from erro
-        return self._corrigir_recorte(original, imagem)
-
-    # Acima deste "serrilhado" (contorno muito mais comprido que o de uma
-    # forma lisa) o recorte é considerado quebrado. Medido em 06/10/2026:
-    # produtos bons ficam entre 0,9 e 1,7; papel higiênico branco, 3,4.
-    _SERRILHADO_MAXIMO = 2.5
-
-    def _corrigir_recorte(self, original: Image.Image, recorte_ia: Image.Image) -> Image.Image:
-        """
-        Conserta os dois defeitos do recorte por IA nas fotos da Amazon.
-
-        1. A IA apaga pedaços de embalagens "chapadas" (fralda, elásticos):
-           ela acha que o fundo verde/amarelo da arte é fundo da foto. Mas a
-           foto da Amazon tem fundo BRANCO: tudo que não é o branco ligado às
-           bordas da foto é produto e volta para a máscara.
-        2. As áreas que a IA apagou ficavam pretas quando eram tapadas (o
-           rembg zera a cor do que apaga). A cor agora vem sempre da foto
-           original.
-
-        Se mesmo assim o contorno sair todo picotado (produto branco em fundo
-        branco, como papel higiênico), não recortamos: o produto vai inteiro,
-        num cartão de cantos arredondados, que fica bonito sobre o cenário.
-        """
-        cores = np.asarray(original)[..., :3].astype(int)
-        alfa_ia = np.asarray(recorte_ia.getchannel("A"))
-
-        conteudo = ~self._fundo_branco(cores) & ~self._sombra_cinza(cores)
-        conteudo = binary_opening(conteudo, iterations=1)  # tira pontinhos soltos
-        alfa = np.maximum(alfa_ia, np.where(conteudo, 255, 0))
-        alfa = np.where(binary_fill_holes(alfa >= 128) & (alfa < 128), 255, alfa).astype("uint8")
-
-        if self.serrilhado(alfa >= 128) > self._SERRILHADO_MAXIMO:
-            return self.em_cartao(original)
-        resultado = original.copy()
-        resultado.putalpha(Image.fromarray(alfa))
-        return resultado
-
-    @staticmethod
-    def _fundo_branco(cores: np.ndarray, limiar: int = 225) -> np.ndarray:
-        """Pixels quase brancos ligados à borda da foto (o fundo de estúdio)."""
-        claro = cores.min(axis=2) >= limiar
-        rotulos, _ = label(claro)
-        bordas = np.concatenate([rotulos[0], rotulos[-1], rotulos[:, 0], rotulos[:, -1]])
-        return np.isin(rotulos, np.setdiff1d(np.unique(bordas), [0]))
-
-    @staticmethod
-    def _sombra_cinza(cores: np.ndarray) -> np.ndarray:
-        """Cinza claro sem cor: a sombra no chão da foto, que não é produto."""
-        return (cores.min(axis=2) >= 170) & ((cores.max(axis=2) - cores.min(axis=2)) <= 18)
-
-    @staticmethod
-    def serrilhado(mascara: np.ndarray) -> float:
-        """
-        Quanto o contorno é mais comprido que o de uma forma lisa em volta
-        (envoltória convexa). Forma lisa ~1; recorte picotado bem acima.
-        """
-        mascara = binary_fill_holes(mascara)
-        contorno = mascara & ~binary_erosion(mascara)
-        ys, xs = np.nonzero(contorno)
-        if len(xs) < 3:
-            return 0.0
-        try:
-            perimetro_liso = ConvexHull(np.c_[xs, ys]).area  # em 2D, "area" é o perímetro
-        except Exception:
-            return 0.0
-        return float(contorno.sum() / perimetro_liso) if perimetro_liso else 0.0
-
-    @staticmethod
-    def em_cartao(original: Image.Image, raio_relativo: float = 0.05) -> Image.Image:
-        """A foto inteira com cantos arredondados: o plano B quando não dá para recortar."""
-        cartao = original.convert("RGBA")
-        mascara = Image.new("L", cartao.size, 0)
-        raio = round(min(cartao.size) * raio_relativo)
-        ImageDraw.Draw(mascara).rounded_rectangle((0, 0, cartao.width - 1, cartao.height - 1), raio, fill=255)
-        cartao.putalpha(mascara)
-        return cartao
+        return self._preencher_buracos(imagem)
 
     @staticmethod
     def _preencher_buracos(imagem: Image.Image) -> Image.Image:
