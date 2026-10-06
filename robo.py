@@ -26,7 +26,9 @@ import logging
 import os
 import random
 import sys
+import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -35,6 +37,8 @@ from dotenv import load_dotenv
 
 from main import configurar_log, interpretar_linha
 from pipeline import ERROS_DO_PIPELINE, Pipeline, Produto, ProdutoInvalidoError
+from services.amazon_service import AmazonError, AmazonService
+from services.message_service import MessageService
 from services.whatsapp_service import WhatsAppError, WhatsAppService
 
 load_dotenv()
@@ -60,6 +64,10 @@ HORA_FIM = int(os.getenv("HORA_FIM", "23"))
 BRASILIA = timezone(timedelta(hours=-3))
 
 SEGUNDOS_ENTRE_CONFERIDAS = 30
+# Antes de postar, confere o preço do momento na Amazon (1 = sim).
+ATUALIZAR_PRECO = os.getenv("ATUALIZAR_PRECO", "1") == "1"
+
+BuscarPreco = Callable[[str], tuple[float | None, float | None]]
 
 log = logging.getLogger("robo")
 
@@ -215,7 +223,59 @@ class Robo:
 
     canal: str
     whatsapp: WhatsAppService = field(default_factory=WhatsAppService)
+    # Quem consulta o preço na Amazon (ASIN -> (atual, "De")). Nos testes
+    # entra um dublê, para não acessar a internet.
+    buscar_preco: BuscarPreco | None = None
     _pipeline: Pipeline | None = None
+
+    def _preco_do_momento(self, asin: str) -> tuple[float | None, float | None]:
+        if self.buscar_preco is None:
+            amazon = AmazonService()
+
+            def buscar(codigo: str) -> tuple[float | None, float | None]:
+                return amazon.extrair_preco(amazon.baixar_html(amazon.montar_url_limpa(codigo)))
+
+            self.buscar_preco = buscar
+        # A Amazon às vezes entrega a página sem o quadro de preço; uma
+        # segunda tentativa costuma vir completa.
+        for tentativa in range(2):
+            try:
+                atual, riscado = self.buscar_preco(asin)
+            except AmazonError as erro:
+                log.info("  Não consegui abrir a página para ver o preço: %s", erro)
+                return None, None
+            if atual is not None:
+                return atual, riscado
+            if tentativa == 0:
+                time.sleep(3)
+        return None, None
+
+    def _texto_com_preco_do_momento(self, texto: str, produto: Produto, detalhes: dict) -> tuple[str, dict]:
+        """
+        Remonta o texto com o preço de agora. A chamada (headline), o nome e
+        o link continuam os mesmos da peça; só a linha do preço muda. Se a
+        Amazon não mostrar o preço, fica o preço da lista.
+        """
+        blocos = texto.split("\n\n")
+        link = next((b[1:].strip() for b in blocos if b.startswith("🔗")), "")
+        nome = next((b[1:].strip() for b in blocos if b.startswith("✅")), "")
+        asin = detalhes.get("asin") or (re.search(r"/dp/([A-Z0-9]{10})", link) or [None, None])[1]
+        if not (ATUALIZAR_PRECO and asin and link and nome):
+            return texto, {"preco_fonte": "lista"}
+
+        atual, riscado = self._preco_do_momento(asin)
+        if atual is None:
+            log.info("  A Amazon não mostrou o preço agora; vai o preço da lista.")
+            return texto, {"preco_fonte": "lista"}
+
+        oferta = produto.ofertas[0]
+        de = riscado if riscado and riscado > atual else (oferta.preco_de if oferta.preco_de and oferta.preco_de > atual else None)
+        novo = MessageService.formatar_mensagem(
+            headline=blocos[0], produto=nome, link=link, preco_por=atual, preco_de=de, cupom=oferta.cupom,
+        )
+        if atual != oferta.preco_por:
+            log.info("  Preço atualizado: R$ %.2f na lista -> R$ %.2f agora.", oferta.preco_por, atual)
+        return novo, {"preco_fonte": "amazon", "preco": atual, "preco_de": de}
 
     def _gerar_ou_reaproveitar(self, linha: str, produto: Produto) -> tuple[Path, str, dict]:
         cache = json.loads(ARQUIVO_CACHE.read_text(encoding="utf-8")) if ARQUIVO_CACHE.exists() else {}
@@ -244,6 +304,7 @@ class Robo:
             imagem, texto, detalhes = self._gerar_ou_reaproveitar(linha, produto)
         except ERROS_DO_PIPELINE as erro:
             raise RoboError(f"Falhou ao gerar a peça de:\n{linha}\nMotivo: {erro}") from erro
+        texto, info_preco = self._texto_com_preco_do_momento(texto, produto, detalhes)
         try:
             resultado = self.whatsapp.postar(self.canal, imagem, texto)
         except WhatsAppError as erro:
@@ -253,6 +314,7 @@ class Robo:
 
         registrar_post(linha, {
             **detalhes,
+            **info_preco,
             "imagem": imagem.name,
             "server_id": resultado.get("serverId"),
             "etiqueta_ia": bool(resultado.get("etiquetaIA")),

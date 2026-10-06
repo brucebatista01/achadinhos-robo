@@ -151,6 +151,34 @@ class AmazonService:
             int(quantidade.group(1).replace(".", "")),
         )
 
+    def extrair_preco(self, html: str) -> tuple[float | None, float | None]:
+        """
+        Extrai (preço atual, preço "De") da página, ex.: (24.16, 34.90).
+
+        O preço atual é o "preço a pagar" do quadro principal, que tem uma
+        marca própria (apex-pricetopay-value); o "De" é o preço riscado
+        (apex-basisprice-value). A página tem dezenas de outros preços
+        (produtos parecidos, outras ofertas), por isso só essas marcas valem.
+
+        Retorna None no que não achar. Isso é comum: a Amazon às vezes entrega
+        uma versão da página sem o quadro de preço ("adicione ao carrinho
+        para ver"), e aí quem chama usa o preço da lista.
+        """
+        atual = None
+        inicio = html.find("apex-pricetopay-value")
+        if inicio >= 0:
+            casamento = re.search(
+                r'a-price-whole">([\d.]+)<.*?a-price-fraction">(\d{2})<', html[inicio:inicio + 2000], re.S
+            )
+            if casamento:
+                atual = float(f"{casamento.group(1).replace('.', '')}.{casamento.group(2)}")
+
+        riscado = None
+        casamento_de = re.search(r'apex-basisprice-value[^>]*><span class="a-offscreen">R\$\s*([\d.]+,\d{2})<', html)
+        if casamento_de:
+            riscado = float(casamento_de.group(1).replace(".", "").replace(",", "."))
+        return atual, riscado
+
 
 # Bloco de teste rápido.
 if __name__ == "__main__":

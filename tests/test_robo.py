@@ -51,10 +51,12 @@ class PipelineFalso:
             raise self.erro
         imagem = self.pasta / f"peca{self.chamadas}.png"
         imagem.write_bytes(b"png")
-        return Peca("ASIN", "Produto", imagem, {"amazon": "TEXTO PRONTO"})
+        return Peca("AAAAAAAAAA", "Produto", imagem, {"amazon": TEXTO_PECA})
 
 
 LINHA_A = "https://www.amazon.com.br/dp/AAAAAAAAAA | 10,00"
+TEXTO_PECA = ("CHAMADA BOA\n\n✅ Produto\n\n🔥 POR R$ 10,00\n\n"
+              "🔗 https://www.amazon.com.br/dp/AAAAAAAAAA?tag=bru2001-20")
 LINHA_B = "https://www.amazon.com.br/dp/BBBBBBBBBB | 20,00 | 30,00 | CUPOM"
 
 
@@ -62,8 +64,9 @@ def escrever_lista(pasta: Path, *linhas: str) -> None:
     (pasta / "lista.txt").write_text("# comentário\n\n" + "\n".join(linhas), encoding="utf-8")
 
 
-def criar_robo(pasta, whatsapp=None, erro=None) -> robo.Robo:
-    instancia = robo.Robo(canal="Canal Teste", whatsapp=whatsapp or WhatsAppFalso())
+def criar_robo(pasta, whatsapp=None, erro=None, preco=(10.0, None)) -> robo.Robo:
+    instancia = robo.Robo(canal="Canal Teste", whatsapp=whatsapp or WhatsAppFalso(),
+                          buscar_preco=lambda asin: preco)
     instancia._pipeline = PipelineFalso(pasta, erro)
     return instancia
 
@@ -125,7 +128,7 @@ def test_posta_registra_e_guarda_o_ultimo(pasta_dados):
     criar_robo(pasta_dados, whatsapp).postar_um(robo.Estado())
 
     canal, imagem, texto = whatsapp.posts[0]
-    assert (canal, texto) == ("Canal Teste", "TEXTO PRONTO")
+    assert (canal, texto) == ("Canal Teste", TEXTO_PECA)
     assert imagem.exists()
     assert robo.Estado.carregar().ultimo == LINHA_A
     assert LINHA_A in (pasta_dados / "postados.log").read_text(encoding="utf-8")
@@ -207,7 +210,7 @@ def test_post_guarda_detalhes_para_o_painel(pasta_dados):
     escrever_lista(pasta_dados, LINHA_A)
     criar_robo(pasta_dados).postar_um(robo.Estado())
     registro = json.loads((pasta_dados / "postados.jsonl").read_text(encoding="utf-8"))
-    assert registro["asin"] == "ASIN"
+    assert registro["asin"] == "AAAAAAAAAA"
     assert registro["server_id"] == 1
     assert registro["etiqueta_ia"] is True
 
@@ -226,3 +229,24 @@ def test_config_invalida_nao_e_salva(pasta_dados):
     with pytest.raises(ValueError):
         robo.Config(hora_inicio=22, hora_fim=8).salvar()
     assert not (pasta_dados / "config.json").exists()
+
+
+# ---------------------------------------------------------------- preço do momento
+
+
+def test_posta_com_o_preco_de_agora_da_amazon(pasta_dados):
+    escrever_lista(pasta_dados, LINHA_A)
+    whatsapp = WhatsAppFalso()
+    criar_robo(pasta_dados, whatsapp, preco=(8.5, 12.0)).postar_um(robo.Estado())
+    texto = whatsapp.posts[0][2]
+    assert "🔥 DE R$ 12,00 | POR R$ 8,50" in texto
+    assert texto.startswith("CHAMADA BOA")
+    assert texto.endswith("?tag=bru2001-20")
+
+
+def test_sem_preco_na_pagina_usa_o_da_lista(pasta_dados, monkeypatch):
+    monkeypatch.setattr(robo.time, "sleep", lambda s: None)
+    escrever_lista(pasta_dados, LINHA_A)
+    whatsapp = WhatsAppFalso()
+    criar_robo(pasta_dados, whatsapp, preco=(None, None)).postar_um(robo.Estado())
+    assert whatsapp.posts[0][2] == TEXTO_PECA
