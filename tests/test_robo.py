@@ -176,3 +176,20 @@ def test_comandos_ligar_desligar(pasta_dados, capsys):
     assert robo.Estado.carregar().ligado
     robo.main(["status"])
     assert "Ligado" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- afiliado
+
+
+def test_etiqueta_de_afiliado_substitui_o_link_da_lista(pasta_dados, monkeypatch):
+    monkeypatch.setenv("AMAZON_TAG", "bru2001-20")
+    escrever_lista(pasta_dados, "https://amzn.to/linkdeoutro | 10,00")
+    _, produto = robo.ler_lista()[0]
+    assert produto.ofertas[0].link is None  # o pipeline monta com a etiqueta
+    assert produto.link_amazon == "https://amzn.to/linkdeoutro"  # foto continua vindo daqui
+
+
+def test_sem_etiqueta_mantem_o_link_da_lista(pasta_dados, monkeypatch):
+    monkeypatch.delenv("AMAZON_TAG", raising=False)
+    escrever_lista(pasta_dados, LINHA_A)
+    assert robo.ler_lista()[0][1].ofertas[0].link == LINHA_A.split(" |")[0]

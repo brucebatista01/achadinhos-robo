@@ -27,7 +27,7 @@ import os
 import random
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -119,12 +119,25 @@ def ler_lista() -> list[tuple[str, Produto]]:
         if not linha or linha.startswith("#"):
             continue
         try:
-            produtos.append((linha, interpretar_linha(linha)))
+            produtos.append((linha, com_etiqueta_de_afiliado(interpretar_linha(linha))))
         except ProdutoInvalidoError as erro:
             raise RoboError(f"Linha {numero} da lista está errada: {erro}") from erro
     if not produtos:
         raise RoboError("A lista de produtos está vazia.")
     return produtos
+
+
+def com_etiqueta_de_afiliado(produto: Produto) -> Produto:
+    """
+    Com AMAZON_TAG no .env, TODO post usa a etiqueta de afiliado da dona do
+    robô, mesmo que o link da lista seja de outra pessoa (ex.: amzn.to de
+    outro afiliado). Apagar o link da oferta faz o pipeline montar o link
+    com a etiqueta a partir do código do produto (ASIN).
+    """
+    if not os.getenv("AMAZON_TAG"):
+        return produto
+    ofertas = tuple(replace(oferta, link=None) for oferta in produto.ofertas)
+    return replace(produto, ofertas=ofertas)
 
 
 def sortear(produtos: list[tuple[str, Produto]], ultimo: str,
@@ -160,7 +173,8 @@ class Robo:
 
     def _gerar_ou_reaproveitar(self, linha: str, produto: Produto) -> tuple[Path, str]:
         cache = json.loads(ARQUIVO_CACHE.read_text(encoding="utf-8")) if ARQUIVO_CACHE.exists() else {}
-        guardada = cache.get(linha)
+        chave = f"{linha} [tag={os.getenv('AMAZON_TAG', '')}]"
+        guardada = cache.get(chave)
         if guardada and Path(guardada["imagem"]).exists():
             log.info("  Reaproveitando a peça já gerada.")
             return Path(guardada["imagem"]), guardada["texto"]
@@ -171,7 +185,7 @@ class Robo:
             produto, ao_avancar=lambda n, etapa: log.info("  [%d/6] %s...", n, etapa)
         )
         texto = peca.mensagens["amazon"]
-        cache[linha] = {"imagem": str(peca.caminho_imagem), "texto": texto}
+        cache[chave] = {"imagem": str(peca.caminho_imagem), "texto": texto}
         ARQUIVO_CACHE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
         return peca.caminho_imagem, texto
 
@@ -240,7 +254,7 @@ def main(argumentos: list[str]) -> int:
     if comando == "ligar":
         estado.ligado, estado.motivo = True, ""
         estado.salvar()
-        print("Robô LIGADO. O próximo post sai em até 15 minutos.")
+        print(f"Robô LIGADO. O próximo post sai em até {MINUTOS_ENTRE_POSTS} minuto(s).")
     elif comando == "desligar":
         estado.ligado, estado.motivo = False, ""
         estado.salvar()
