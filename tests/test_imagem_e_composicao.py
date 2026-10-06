@@ -163,3 +163,73 @@ def test_preservar_produto_mantem_o_produto_original_e_o_cenario():
     resultado = ImageService.preservar_produto(cenario, enquadrada)
     assert resultado.getpixel((50, 60)) == (255, 0, 0, 255)   # produto fiel
     assert resultado.getpixel((5, 5)) == (30, 90, 30, 255)    # cenário intacto
+
+
+# ---------------------------------------------------------------------- #
+# Conserto do recorte (embalagem "comida" pela IA, buracos pretos)
+# ---------------------------------------------------------------------- #
+
+def foto_amazon(cor_produto=(30, 160, 150)) -> Image.Image:
+    """Embalagem chapada sobre fundo branco de estúdio, como na Amazon."""
+    foto = Image.new("RGBA", (120, 120), (255, 255, 255, 255))
+    foto.paste(cor_produto + (255,), (20, 20, 100, 100))
+    return foto
+
+
+def recorte_da_ia(foto: Image.Image) -> Image.Image:
+    """Imita o rembg: o fundo branco sai (transparente e com cor zerada)."""
+    recorte = Image.new("RGBA", foto.size, (0, 0, 0, 0))
+    for x in range(foto.width):
+        for y in range(foto.height):
+            r, g, b, _ = foto.getpixel((x, y))
+            if min(r, g, b) < 225:
+                recorte.putpixel((x, y), (r, g, b, 255))
+    return recorte
+
+
+def recorte_que_comeu_metade(foto: Image.Image) -> Image.Image:
+    """Imita o defeito do rembg: apaga metade da embalagem e zera a cor."""
+    recorte = recorte_da_ia(foto)
+    recorte.paste((0, 0, 0, 0), (20, 20, 100, 60))
+    return recorte
+
+
+def test_parte_da_embalagem_apagada_pela_ia_volta(servico_imagem):
+    foto = foto_amazon()
+    resultado = servico_imagem._corrigir_recorte(foto, recorte_que_comeu_metade(foto))
+    assert resultado.getpixel((60, 30)) == (30, 160, 150, 255)  # voltou, com a cor certa
+    assert resultado.getpixel((5, 5))[3] == 0                  # o fundo branco saiu
+
+
+def test_buraco_tapado_usa_a_cor_original_e_nao_preto(servico_imagem):
+    foto = foto_amazon()
+    recorte = recorte_da_ia(foto)
+    recorte.paste((0, 0, 0, 0), (50, 50, 70, 70))  # buraco no meio, cor zerada
+    resultado = servico_imagem._corrigir_recorte(foto, recorte)
+    assert resultado.getpixel((60, 60)) == (30, 160, 150, 255)
+
+
+def test_sombra_cinza_no_chao_nao_vira_produto(servico_imagem):
+    foto = foto_amazon()
+    foto.paste((215, 215, 215, 255), (10, 102, 110, 112))  # sombra embaixo
+    recorte = recorte_da_ia(foto)
+    recorte.paste((0, 0, 0, 0), (0, 101, 120, 120))
+    resultado = servico_imagem._corrigir_recorte(foto, recorte)
+    assert resultado.getpixel((60, 106))[3] == 0
+
+
+def test_recorte_picotado_vira_cartao(servico_imagem):
+    # Produto branco em fundo branco: só sobram "dentes" soltos no recorte.
+    foto = Image.new("RGBA", (120, 120), (255, 255, 255, 255))
+    for x in range(10, 110, 6):
+        foto.paste((40, 40, 40, 255), (x, 10, x + 2, 110))
+    resultado = servico_imagem._corrigir_recorte(foto, recorte_da_ia(foto))
+    assert resultado.getpixel((60, 60))[3] == 255  # foto inteira, sem furos
+    assert resultado.getpixel((0, 0))[3] == 0      # cantos arredondados
+
+
+def test_serrilhado_de_forma_lisa_e_perto_de_um():
+    import numpy as np
+    quadrado = np.zeros((100, 100), bool)
+    quadrado[20:80, 20:80] = True
+    assert 0.8 < ImageService.serrilhado(quadrado) < 1.2
