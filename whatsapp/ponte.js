@@ -128,4 +128,10 @@ http.createServer(async (req, res) => {
 }).listen(PORTA, () => console.log(`Ponte ouvindo na porta ${PORTA}.`));
 
 fs.mkdirSync(PASTA_DADOS, { recursive: true });
+// O Chromium deixa uma "trava" na pasta da sessão com o nome do container.
+// Quando o Docker recria o container (nome novo), a trava velha impede o
+// Chromium de abrir. Só esta ponte usa a sessão, então é seguro apagar.
+for (const trava of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+    fs.rmSync(path.join(PASTA_DADOS, 'sessao', 'session', trava), { force: true });
+}
 cliente.initialize();
