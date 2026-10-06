@@ -44,6 +44,11 @@ ARQUIVO_LISTA = PASTA_DADOS / "lista.txt"
 ARQUIVO_ESTADO = PASTA_DADOS / "estado.json"
 ARQUIVO_CACHE = PASTA_DADOS / "pecas.json"
 ARQUIVO_HISTORICO = PASTA_DADOS / "postados.log"
+# Mesmo histórico, em formato que o painel lê (um JSON por linha).
+ARQUIVO_POSTS = PASTA_DADOS / "postados.jsonl"
+ARQUIVO_CONFIG = PASTA_DADOS / "config.json"
+# Se este arquivo existir, o robô posta na próxima conferida (botão do painel).
+ARQUIVO_POSTAR_AGORA = PASTA_DADOS / "postar_agora"
 PASTA_PECAS = PASTA_DADOS / "output"
 
 MINUTOS_ENTRE_POSTS = int(os.getenv("MINUTOS_ENTRE_POSTS", "15"))
@@ -87,30 +92,70 @@ class Estado:
         caminho.write_text(json.dumps(self.__dict__, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+@dataclass
+class Config:
+    """
+    Ajustes que o dono muda pelo painel, sem reiniciar nada.
+
+    O .env dá os valores iniciais; o painel grava `dados/config.json`, que
+    vale por cima deles. O robô relê a cada conferida.
+    """
+
+    minutos_entre_posts: int = MINUTOS_ENTRE_POSTS
+    hora_inicio: int = HORA_INICIO
+    hora_fim: int = HORA_FIM
+
+    @classmethod
+    def carregar(cls) -> Config:
+        if not ARQUIVO_CONFIG.exists():
+            return cls()
+        salvos = json.loads(ARQUIVO_CONFIG.read_text(encoding="utf-8"))
+        return cls(**{chave: int(valor) for chave, valor in salvos.items() if chave in cls.__dataclass_fields__})
+
+    def validar(self) -> None:
+        if not 1 <= self.minutos_entre_posts <= 24 * 60:
+            raise ValueError("O intervalo precisa ficar entre 1 minuto e 24 horas.")
+        if not (0 <= self.hora_inicio < self.hora_fim <= 24):
+            raise ValueError("O horário precisa ser algo como 8h às 23h (início antes do fim).")
+
+    def salvar(self) -> None:
+        self.validar()
+        ARQUIVO_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        ARQUIVO_CONFIG.write_text(json.dumps(self.__dict__, indent=2), encoding="utf-8")
+
+
 def agora() -> datetime:
     return datetime.now(BRASILIA)
 
 
-def registrar_post(linha: str) -> None:
-    """Uma linha por post: data/hora e o produto. Fácil de abrir e conferir."""
+def registrar_post(linha: str, detalhes: dict | None = None) -> None:
+    """
+    Guarda o post em dois formatos: uma linha de texto fácil de ler e um JSON
+    com os detalhes (produto, imagem, número do post no WhatsApp) para o
+    painel cruzar com as visualizações.
+    """
     caminho = ARQUIVO_HISTORICO
     caminho.parent.mkdir(parents=True, exist_ok=True)
+    momento = agora()
     with caminho.open("a", encoding="utf-8") as arquivo:
-        arquivo.write(f"{agora():%d/%m/%Y %H:%M} | {linha}\n")
+        arquivo.write(f"{momento:%d/%m/%Y %H:%M} | {linha}\n")
+    registro = {"quando": momento.isoformat(timespec="seconds"), "linha": linha, **(detalhes or {})}
+    with ARQUIVO_POSTS.open("a", encoding="utf-8") as arquivo:
+        arquivo.write(json.dumps(registro, ensure_ascii=False) + "\n")
 
 
 # ---------------------------------------------------------------------- #
 # Lista de produtos e sorteio
 # ---------------------------------------------------------------------- #
 
-def ler_lista() -> list[tuple[str, Produto]]:
+def ler_lista(caminho: Path | None = None) -> list[tuple[str, Produto]]:
     """
     Lê a lista (mesmo formato do produtos.txt: link | preco_por | preco_de | cupom).
 
     Diferente do lote, uma linha mal escrita aqui PARA o robô: ninguém está
     olhando o terminal, então é melhor parar e avisar do que pular calado.
     """
-    caminho = ARQUIVO_LISTA
+    caminho = caminho or ARQUIVO_LISTA
     if not caminho.exists():
         raise RoboError(f"Lista de produtos não encontrada ({caminho}).")
     produtos = []
@@ -148,8 +193,9 @@ def sortear(produtos: list[tuple[str, Produto]], ultimo: str,
     return sorteio.choice(opcoes)
 
 
-def dentro_do_horario(momento: datetime) -> bool:
-    return HORA_INICIO <= momento.hour < HORA_FIM
+def dentro_do_horario(momento: datetime, config: Config | None = None) -> bool:
+    config = config or Config()
+    return config.hora_inicio <= momento.hour < config.hora_fim
 
 
 # ---------------------------------------------------------------------- #
@@ -171,13 +217,13 @@ class Robo:
     whatsapp: WhatsAppService = field(default_factory=WhatsAppService)
     _pipeline: Pipeline | None = None
 
-    def _gerar_ou_reaproveitar(self, linha: str, produto: Produto) -> tuple[Path, str]:
+    def _gerar_ou_reaproveitar(self, linha: str, produto: Produto) -> tuple[Path, str, dict]:
         cache = json.loads(ARQUIVO_CACHE.read_text(encoding="utf-8")) if ARQUIVO_CACHE.exists() else {}
         chave = f"{linha} [tag={os.getenv('AMAZON_TAG', '')}]"
         guardada = cache.get(chave)
         if guardada and Path(guardada["imagem"]).exists():
             log.info("  Reaproveitando a peça já gerada.")
-            return Path(guardada["imagem"]), guardada["texto"]
+            return Path(guardada["imagem"]), guardada["texto"], guardada.get("detalhes", {})
 
         if self._pipeline is None:  # carrega o modelo de recorte só quando precisa
             self._pipeline = Pipeline(pasta_saida=PASTA_PECAS)
@@ -185,26 +231,32 @@ class Robo:
             produto, ao_avancar=lambda n, etapa: log.info("  [%d/6] %s...", n, etapa)
         )
         texto = peca.mensagens["amazon"]
-        cache[chave] = {"imagem": str(peca.caminho_imagem), "texto": texto}
+        detalhes = {"asin": peca.asin, "produto": peca.nome_produto}
+        cache[chave] = {"imagem": str(peca.caminho_imagem), "texto": texto, "detalhes": detalhes}
         ARQUIVO_CACHE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
-        return peca.caminho_imagem, texto
+        return peca.caminho_imagem, texto, detalhes
 
     def postar_um(self, estado: Estado) -> None:
         """Sorteia, gera e posta UM produto. Qualquer falha vira RoboError."""
         linha, produto = sortear(ler_lista(), estado.ultimo)
         log.info("Sorteado: %s", linha)
         try:
-            imagem, texto = self._gerar_ou_reaproveitar(linha, produto)
+            imagem, texto, detalhes = self._gerar_ou_reaproveitar(linha, produto)
         except ERROS_DO_PIPELINE as erro:
             raise RoboError(f"Falhou ao gerar a peça de:\n{linha}\nMotivo: {erro}") from erro
         try:
-            com_etiqueta = self.whatsapp.postar(self.canal, imagem, texto)
+            resultado = self.whatsapp.postar(self.canal, imagem, texto)
         except WhatsAppError as erro:
             raise RoboError(f"Falhou ao postar no WhatsApp: {erro}") from erro
-        if not com_etiqueta:
+        if not resultado.get("etiquetaIA"):
             log.warning("  Post sem a etiqueta de IA (o WhatsApp não aceitou). Marque à mão.")
 
-        registrar_post(linha)
+        registrar_post(linha, {
+            **detalhes,
+            "imagem": imagem.name,
+            "server_id": resultado.get("serverId"),
+            "etiqueta_ia": bool(resultado.get("etiquetaIA")),
+        })
         # Relê o estado antes de gravar: alguém pode ter desligado o robô
         # enquanto a peça era gerada, e isso não pode ser desfeito aqui.
         estado = Estado.carregar()
@@ -226,13 +278,14 @@ class Robo:
 
     def rodar(self) -> None:
         """Laço principal: confere o estado de tempos em tempos e posta na hora certa."""
-        log.info("Robô de pé. Posta a cada %d min, das %dh às %dh, no canal %r.",
-                 MINUTOS_ENTRE_POSTS, HORA_INICIO, HORA_FIM, self.canal)
-        proximo = agora()
+        log.info("Robô de pé, no canal %r. Intervalo e horário vêm do painel.", self.canal)
+        ultimo_post: datetime | None = None
         while True:
-            estado = Estado.carregar()
-            momento = agora()
-            if estado.ligado and dentro_do_horario(momento) and momento >= proximo:
+            estado, config, momento = Estado.carregar(), Config.carregar(), agora()
+            pedido_do_painel = ARQUIVO_POSTAR_AGORA.exists()
+            na_hora = ultimo_post is None or momento >= ultimo_post + timedelta(minutes=config.minutos_entre_posts)
+            if pedido_do_painel or (estado.ligado and dentro_do_horario(momento, config) and na_hora):
+                ARQUIVO_POSTAR_AGORA.unlink(missing_ok=True)
                 if not self.whatsapp.esta_pronto():
                     log.info("Esperando o WhatsApp conectar...")
                 else:
@@ -240,7 +293,7 @@ class Robo:
                         self.postar_um(estado)
                     except RoboError as erro:
                         self.desligar_e_avisar(estado, str(erro))
-                    proximo = agora() + timedelta(minutes=MINUTOS_ENTRE_POSTS)
+                    ultimo_post = agora()
             time.sleep(SEGUNDOS_ENTRE_CONFERIDAS)
 
 
@@ -256,7 +309,7 @@ def main(argumentos: list[str]) -> int:
     if comando == "ligar":
         estado.ligado, estado.motivo = True, ""
         estado.salvar()
-        print(f"Robô LIGADO. O próximo post sai em até {MINUTOS_ENTRE_POSTS} minuto(s).")
+        print(f"Robô LIGADO. O próximo post sai em até {Config.carregar().minutos_entre_posts} minuto(s).")
     elif comando == "desligar":
         estado.ligado, estado.motivo = False, ""
         estado.salvar()

@@ -90,10 +90,66 @@ async function etiquetarComoIA(canalId, mensagemId) {
         for (let tentativa = 0; msg && msg.serverId == null && tentativa < 20; tentativa++) {
             await new Promise((r) => setTimeout(r, 500));
         }
-        if (!msg || msg.serverId == null) return false;
+        if (!msg || msg.serverId == null) return { etiqueta: false, serverId: null };
         const acao = window.require('WAWebNewsletterAddAiContentLabelAction');
-        return (await acao.WAWebNewsletterAddAiContentLabelAction(canalId, String(msg.serverId), 'MESSAGE')) === true;
+        const ok = await acao.WAWebNewsletterAddAiContentLabelAction(canalId, String(msg.serverId), 'MESSAGE');
+        return { etiqueta: ok === true, serverId: msg.serverId };
     }, canalId, mensagemId);
+}
+
+async function metricasDoCanal(canal, limite) {
+    /*
+     * Números para o painel: seguidores do canal e, de cada post recente,
+     * visualizações, reações e encaminhamentos.
+     *
+     * Carregar as mensagens faz o WhatsApp Web buscar no servidor os números
+     * atualizados de cada post (é o que acontece quando o dono abre o canal).
+     * Os seguidores vêm da mesma consulta que a tela "Informações do canal" usa.
+     */
+    await canal.fetchMessages({ limit: limite, fromMe: true });
+    return cliente.pupPage.evaluate(async (jid, limite) => {
+        const chat = await window.WWebJS.getChat(jid, { getAsModel: false });
+        const msgs = chat.msgs.getModelsArray()
+            .filter((m) => m.serverId != null && m.serverId < 1e9 && m.type !== 'newsletter_notification')
+            .slice(-limite);
+        try {
+            // Pede ao servidor os números novos (com limite de tempo: se o
+            // WhatsApp demorar, ficamos com os números que já estão na tela).
+            await Promise.race([
+                new Promise((r) => setTimeout(r, 15000)),
+                window.require('WAWebNewsletterGetMessageUpdatesAction').maybeUpdateMsgsAddOns(msgs, chat),
+            ]);
+        } catch (e) { /* números da última carga continuam valendo */ }
+
+        let seguidores = null;
+        try {
+            const meta = await window.require('WAWebNewsletterMetadataQueryJob')
+                .queryNewsletterMetadataByJid(jid, 'ADMIN', { subscribers: true });
+            seguidores = meta.newsletterSubscribersMetadataMixin.subscribersCount;
+        } catch (e) { /* segue sem o número de seguidores */ }
+
+        const posts = [];
+        for (const m of msgs) {
+            let reacoes = 0;
+            if (m.hasReaction) {
+                try {
+                    const r = await window.require('WAWebCollections').Reactions.find(m.id);
+                    for (const grupo of (r && r.reactions ? r.reactions.serialize() : [])) {
+                        reacoes += grupo.senders ? grupo.senders.length : 1;
+                    }
+                } catch (e) { reacoes = 1; }
+            }
+            posts.push({
+                serverId: m.serverId,
+                quando: m.t,
+                legenda: (m.caption || m.body || '').slice(0, 300),
+                visualizacoes: m.viewCount || 0,
+                reacoes,
+                encaminhamentos: m.forwardsCount || 0,
+            });
+        }
+        return { seguidores, posts };
+    }, canal.id._serialized, limite);
 }
 
 const rotas = {
@@ -107,9 +163,13 @@ const rotas = {
         const midia = MessageMedia.fromFilePath(imagem);
         const mensagem = await destino.sendMessage(midia, { caption: texto });
         const id = mensagem && mensagem.id ? mensagem.id._serialized : null;
-        const rotulado = etiquetaIA && id ? await etiquetarComoIA(destino.id._serialized, id) : false;
-        return { ok: true, id, etiquetaIA: rotulado };
+        const rotulo = etiquetaIA && id
+            ? await etiquetarComoIA(destino.id._serialized, id)
+            : { etiqueta: false, serverId: null };
+        return { ok: true, id, etiquetaIA: rotulo.etiqueta, serverId: rotulo.serverId };
     },
+
+    'POST /metricas': async ({ canal, limite = 60 }) => metricasDoCanal(await acharCanal(canal), limite),
 
     'POST /avisar': async ({ texto }) => {
         // "Conversar comigo mesmo": o aviso chega no próprio número de teste.

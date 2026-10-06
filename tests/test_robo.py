@@ -19,6 +19,9 @@ def pasta_dados(tmp_path, monkeypatch):
     monkeypatch.setattr(robo, "ARQUIVO_ESTADO", tmp_path / "estado.json")
     monkeypatch.setattr(robo, "ARQUIVO_CACHE", tmp_path / "pecas.json")
     monkeypatch.setattr(robo, "ARQUIVO_HISTORICO", tmp_path / "postados.log")
+    monkeypatch.setattr(robo, "ARQUIVO_POSTS", tmp_path / "postados.jsonl")
+    monkeypatch.setattr(robo, "ARQUIVO_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr(robo, "ARQUIVO_POSTAR_AGORA", tmp_path / "postar_agora")
     return tmp_path
 
 
@@ -32,7 +35,7 @@ class WhatsAppFalso:
         if self.falhar:
             raise WhatsAppError("sem conexão")
         self.posts.append((canal, imagem, texto))
-        return True
+        return {"etiquetaIA": True, "serverId": len(self.posts)}
 
     def avisar(self, texto):
         self.avisos.append(texto)
@@ -194,3 +197,32 @@ def test_sem_etiqueta_mantem_o_link_da_lista(pasta_dados, monkeypatch):
     monkeypatch.delenv("AMAZON_TAG", raising=False)
     escrever_lista(pasta_dados, LINHA_A)
     assert robo.ler_lista()[0][1].ofertas[0].link == LINHA_A.split(" |")[0]
+
+
+# ---------------------------------------------------------------- painel
+
+
+def test_post_guarda_detalhes_para_o_painel(pasta_dados):
+    import json
+    escrever_lista(pasta_dados, LINHA_A)
+    criar_robo(pasta_dados).postar_um(robo.Estado())
+    registro = json.loads((pasta_dados / "postados.jsonl").read_text(encoding="utf-8"))
+    assert registro["asin"] == "ASIN"
+    assert registro["server_id"] == 1
+    assert registro["etiqueta_ia"] is True
+
+
+def test_config_do_painel_vale_por_cima_do_env(pasta_dados):
+    from datetime import datetime
+    robo.Config(minutos_entre_posts=10, hora_inicio=9, hora_fim=21).salvar()
+    config = robo.Config.carregar()
+    assert (config.minutos_entre_posts, config.hora_inicio, config.hora_fim) == (10, 9, 21)
+    assert not robo.dentro_do_horario(datetime(2026, 10, 5, 8, 30), config)
+
+
+def test_config_invalida_nao_e_salva(pasta_dados):
+    with pytest.raises(ValueError):
+        robo.Config(minutos_entre_posts=0).salvar()
+    with pytest.raises(ValueError):
+        robo.Config(hora_inicio=22, hora_fim=8).salvar()
+    assert not (pasta_dados / "config.json").exists()

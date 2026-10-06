@@ -34,6 +34,11 @@ if [ ! -f .env ]; then
   chmod 600 .env
 fi
 
+# Código secreto do link do painel. Trocar este valor derruba o link antigo.
+if ! grep -q '^PAINEL_TOKEN=' .env; then
+  echo "PAINEL_TOKEN=$(openssl rand -hex 24)" >> .env
+fi
+
 # Atalho "robo" no terminal da VPS:  robo status | ligar | desligar | log | qr
 cat > /usr/local/bin/robo <<SCRIPT
 #!/usr/bin/env bash

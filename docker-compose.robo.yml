@@ -18,6 +18,23 @@ services:
     depends_on:
       - whatsapp
 
+  painel:
+    build: .
+    command: ["python", "painel.py"]
+    env_file: .env
+    environment:
+      PASTA_DADOS: /dados
+      URL_PONTE_WHATSAPP: http://whatsapp:3000
+    restart: unless-stopped
+    volumes:
+      - ./dados:/dados
+    # Só a própria VPS enxerga esta porta (127.0.0.1). O acesso de fora
+    # passa pelo servidor de sites com HTTPS, nunca direto.
+    ports:
+      - "127.0.0.1:8090:8000"
+    depends_on:
+      - whatsapp
+
   whatsapp:
     build:
       context: .

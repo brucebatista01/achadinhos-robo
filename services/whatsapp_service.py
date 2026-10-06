@@ -53,19 +53,24 @@ class WhatsAppService:
     def listar_canais(self) -> list[dict]:
         return self._chamar("GET", "/canais")
 
-    def postar(self, canal: str, imagem: Path, texto: str) -> bool:
+    def postar(self, canal: str, imagem: Path, texto: str) -> dict:
         """
         Posta a imagem com o texto como legenda (`canal` é o nome ou o id) e
         marca o post com a etiqueta "Conteúdo de IA" do WhatsApp.
 
-        Devolve se a etiqueta entrou. Sem ela o post continua no ar, então
-        isso é um aviso, não uma falha.
+        Devolve {"etiquetaIA": bool, "serverId": int | None}. Sem a etiqueta o
+        post continua no ar, então isso é um aviso, não uma falha. O serverId
+        é o número do post no canal, usado para cruzar com as visualizações.
         """
         # A ponte lê a imagem do disco: os dois containers dividem a pasta de dados.
         resposta = self._chamar(
             "POST", "/postar", {"canal": canal, "imagem": str(imagem.resolve()), "texto": texto}
         )
-        return bool(resposta.get("etiquetaIA"))
+        return {"etiquetaIA": bool(resposta.get("etiquetaIA")), "serverId": resposta.get("serverId")}
+
+    def metricas(self, canal: str, limite: int = 60) -> dict:
+        """Seguidores do canal e visualizações/reações dos posts recentes."""
+        return self._chamar("POST", "/metricas", {"canal": canal, "limite": limite})
 
     def avisar(self, texto: str) -> None:
         """Manda uma mensagem para o próprio número (aviso para o operador)."""
