@@ -26,6 +26,10 @@ from scipy.ndimage import binary_fill_holes
 load_dotenv()
 
 
+# Modelos de recorte já carregados neste processo (nome -> sessão do rembg).
+_SESSOES_REMBG: dict = {}
+
+
 class ImageError(Exception):
     """Exceção específica do serviço de imagem, para tratamento isolado no main."""
 
@@ -67,11 +71,16 @@ class ImageService:
         O Dockerfile chama isto no build para o modelo já vir na imagem.
         """
         if self._sessao_rembg is None:
-            opcoes = onnxruntime.SessionOptions()
-            # Sem o "arena" o onnxruntime devolve a memória depois de cada
-            # foto, em vez de guardar uma reserva grande: o uso fica estável.
-            opcoes.enable_cpu_mem_arena = False
-            self._sessao_rembg = new_session(self._modelo_recorte, sess_opts=opcoes)
+            # O modelo (~1 GB de memória) é carregado UMA vez por processo e
+            # dividido por todas as instâncias: com vários clientes no mesmo
+            # robô, cada um tem seu pipeline, mas o modelo é um só.
+            if self._modelo_recorte not in _SESSOES_REMBG:
+                opcoes = onnxruntime.SessionOptions()
+                # Sem o "arena" o onnxruntime devolve a memória depois de cada
+                # foto, em vez de guardar uma reserva grande: o uso fica estável.
+                opcoes.enable_cpu_mem_arena = False
+                _SESSOES_REMBG[self._modelo_recorte] = new_session(self._modelo_recorte, sess_opts=opcoes)
+            self._sessao_rembg = _SESSOES_REMBG[self._modelo_recorte]
 
     def baixar_imagem(self, url_imagem: str) -> bytes:
         """Baixa os bytes brutos de uma imagem a partir da URL."""

@@ -32,7 +32,7 @@ COPY --chown=user services ./services
 # imagem, em vez de ser baixado no primeiro uso do Danilo.
 RUN python -c "from services.image_service import ImageService; ImageService('/tmp').preparar_modelo()"
 
-COPY --chown=user pipeline.py servidor.py main.py robo.py painel.py ./
+COPY --chown=user pipeline.py servidor.py main.py robo.py painel.py clientes.py ./
 COPY --chown=user painel_web ./painel_web
 COPY --chown=user web ./web
 

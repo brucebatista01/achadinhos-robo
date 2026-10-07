@@ -8,7 +8,10 @@
 set -euo pipefail
 
 PASTA="/opt/achadinhos-robo"
-COMPOSE="docker compose -f $PASTA/docker-compose.robo.yml"
+# As pontes de WhatsApp dos clientes extras ficam num segundo arquivo,
+# escrito pelo cadastro de clientes (clientes.py) dentro de dados/.
+[ -f "$PASTA/dados/docker-compose.clientes.yml" ] || echo "services: {}" > "$PASTA/dados/docker-compose.clientes.yml"
+COMPOSE="docker compose -f $PASTA/docker-compose.robo.yml -f $PASTA/dados/docker-compose.clientes.yml"
 
 # O código chega pelo publicar.ps1 (do PC, pasta E:\Danilo2), sem passar
 # pelo repositório do projeto antigo.
@@ -39,7 +42,15 @@ if ! grep -q '^PAINEL_TOKEN=' .env; then
   echo "PAINEL_TOKEN=$(openssl rand -hex 24)" >> .env
 fi
 
-# Atalho "robo" no terminal da VPS:  robo status | ligar | desligar | log | qr
+# Endereço do painel, para o cadastro de clientes mostrar o link pronto.
+grep -q '^DOMINIO_PAINEL=' .env || echo "DOMINIO_PAINEL=robo.$(grep -E '^DOMINIO=' /opt/achadinhos/.env | cut -d= -f2)" >> .env
+
+# Atalho "robo" no terminal da VPS:
+#   robo status | ligar | desligar | log | historico | canais | reiniciar
+#   robo clientes                                  lista os clientes
+#   robo cliente-novo <id> "<canal>" <tag> <pin>    cadastra e sobe a ponte dele
+#   robo cliente-remover <id>                       tira do robô (a pasta fica)
+#   (ligar/desligar/status/agora aceitam --cliente <id>)
 cat > /usr/local/bin/robo <<SCRIPT
 #!/usr/bin/env bash
 case "\${1:-status}" in
@@ -47,6 +58,13 @@ case "\${1:-status}" in
   historico) tail -n 30 $PASTA/dados/postados.log ;;
   canais) $COMPOSE exec -T robo python -m services.whatsapp_service ;;
   reiniciar) $COMPOSE restart ;;
+  clientes) $COMPOSE exec -T robo python clientes.py listar ;;
+  cliente-novo)
+    $COMPOSE exec -T robo python clientes.py novo "\$2" --canal "\$3" --tag "\$4" --pin "\$5" &&
+    $COMPOSE up -d --build && $COMPOSE restart robo painel ;;
+  cliente-remover)
+    $COMPOSE exec -T robo python clientes.py remover "\$2" &&
+    $COMPOSE up -d --remove-orphans && $COMPOSE restart robo painel ;;
   *) $COMPOSE exec -T robo python robo.py "\$@" ;;
 esac
 SCRIPT

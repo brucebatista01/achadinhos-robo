@@ -7,21 +7,23 @@ from pathlib import Path
 
 import pytest
 
+import clientes
 import robo
+from clientes import Cliente
 from pipeline import AmazonError, Peca
 from services.whatsapp_service import WhatsAppError
 
 
+def cli(pasta: Path, etiqueta: str = "") -> Cliente:
+    """Um cliente de teste com a pasta de dados do teste."""
+    return Cliente(id="teste", nome="Teste", pasta=pasta, canal="Canal Teste", etiqueta=etiqueta,
+                   painel_token="x" * 20, painel_pin="", url_whatsapp="http://ponte-falsa")
+
+
 @pytest.fixture(autouse=True)
 def pasta_dados(tmp_path, monkeypatch):
-    """Cada teste usa uma pasta de dados própria e vazia."""
-    monkeypatch.setattr(robo, "ARQUIVO_LISTA", tmp_path / "lista.txt")
-    monkeypatch.setattr(robo, "ARQUIVO_ESTADO", tmp_path / "estado.json")
-    monkeypatch.setattr(robo, "ARQUIVO_CACHE", tmp_path / "pecas.json")
-    monkeypatch.setattr(robo, "ARQUIVO_HISTORICO", tmp_path / "postados.log")
-    monkeypatch.setattr(robo, "ARQUIVO_POSTS", tmp_path / "postados.jsonl")
-    monkeypatch.setattr(robo, "ARQUIVO_CONFIG", tmp_path / "config.json")
-    monkeypatch.setattr(robo, "ARQUIVO_POSTAR_AGORA", tmp_path / "postar_agora")
+    """Cada teste usa uma pasta de dados própria e vazia, de um cliente só."""
+    monkeypatch.setattr(clientes, "carregar", lambda: [cli(tmp_path)])
     return tmp_path
 
 
@@ -65,7 +67,7 @@ def escrever_lista(pasta: Path, *linhas: str) -> None:
 
 
 def criar_robo(pasta, whatsapp=None, erro=None, preco=(10.0, None)) -> robo.Robo:
-    instancia = robo.Robo(canal="Canal Teste", whatsapp=whatsapp or WhatsAppFalso(),
+    instancia = robo.Robo(cli(pasta), whatsapp=whatsapp or WhatsAppFalso(),
                           buscar_preco=lambda asin: preco)
     instancia._pipeline = PipelineFalso(pasta, erro)
     return instancia
@@ -76,22 +78,22 @@ def criar_robo(pasta, whatsapp=None, erro=None, preco=(10.0, None)) -> robo.Robo
 
 def test_le_lista_ignorando_comentarios(pasta_dados):
     escrever_lista(pasta_dados, LINHA_A, LINHA_B)
-    linhas = [linha for linha, _ in robo.ler_lista()]
+    linhas = [linha for linha, _ in robo.ler_lista(cli(pasta_dados))]
     assert linhas == [LINHA_A, LINHA_B]
 
 
 def test_linha_errada_para_o_robo(pasta_dados):
     escrever_lista(pasta_dados, LINHA_A, "https://amzn.to/x")  # sem preço
     with pytest.raises(robo.RoboError, match="Linha 4"):
-        robo.ler_lista()
+        robo.ler_lista(cli(pasta_dados))
 
 
 def test_lista_inexistente_ou_vazia(pasta_dados):
     with pytest.raises(robo.RoboError, match="não encontrada"):
-        robo.ler_lista()
+        robo.ler_lista(cli(pasta_dados))
     escrever_lista(pasta_dados)
     with pytest.raises(robo.RoboError, match="vazia"):
-        robo.ler_lista()
+        robo.ler_lista(cli(pasta_dados))
 
 
 # ---------------------------------------------------------------- sorteio
@@ -99,7 +101,7 @@ def test_lista_inexistente_ou_vazia(pasta_dados):
 
 def test_sorteio_nunca_repete_o_ultimo(pasta_dados):
     escrever_lista(pasta_dados, LINHA_A, LINHA_B)
-    produtos = robo.ler_lista()
+    produtos = robo.ler_lista(cli(pasta_dados))
     sorteio = random.Random(0)
     for _ in range(50):
         linha, _ = robo.sortear(produtos, LINHA_A, sorteio)
@@ -108,7 +110,7 @@ def test_sorteio_nunca_repete_o_ultimo(pasta_dados):
 
 def test_sorteio_com_um_produto_so_repete(pasta_dados):
     escrever_lista(pasta_dados, LINHA_A)
-    assert robo.sortear(robo.ler_lista(), LINHA_A)[0] == LINHA_A
+    assert robo.sortear(robo.ler_lista(cli(pasta_dados)), LINHA_A)[0] == LINHA_A
 
 
 def test_horario_de_postagem():
@@ -130,7 +132,7 @@ def test_posta_registra_e_guarda_o_ultimo(pasta_dados):
     canal, imagem, texto = whatsapp.posts[0]
     assert (canal, texto) == ("Canal Teste", TEXTO_PECA)
     assert imagem.exists()
-    assert robo.Estado.carregar().ultimo == LINHA_A
+    assert robo.Estado.carregar(cli(pasta_dados)).ultimo == LINHA_A
     assert LINHA_A in (pasta_dados / "postados.log").read_text(encoding="utf-8")
 
 
@@ -152,8 +154,8 @@ def test_link_que_falha_desliga_e_avisa(pasta_dados):
         instancia.postar_um(estado)
     instancia.desligar_e_avisar(estado, str(erro.value))
 
-    assert not robo.Estado.carregar().ligado
-    assert "página não encontrada" in robo.Estado.carregar().motivo
+    assert not robo.Estado.carregar(cli(pasta_dados)).ligado
+    assert "página não encontrada" in robo.Estado.carregar(cli(pasta_dados)).motivo
     assert LINHA_A in whatsapp.avisos[0]
     assert not whatsapp.posts
 
@@ -168,9 +170,9 @@ def test_falha_no_whatsapp_vira_erro_do_robo(pasta_dados):
 def test_desligar_durante_o_post_e_respeitado(pasta_dados):
     """Se alguém desliga enquanto a peça é gerada, o post não religa o robô."""
     escrever_lista(pasta_dados, LINHA_A)
-    robo.Estado(ligado=False).salvar()
+    robo.Estado(ligado=False).salvar(cli(pasta_dados))
     criar_robo(pasta_dados).postar_um(robo.Estado(ligado=True))
-    assert not robo.Estado.carregar().ligado
+    assert not robo.Estado.carregar(cli(pasta_dados)).ligado
 
 
 # ---------------------------------------------------------------- comandos
@@ -178,9 +180,9 @@ def test_desligar_durante_o_post_e_respeitado(pasta_dados):
 
 def test_comandos_ligar_desligar(pasta_dados, capsys):
     assert robo.main(["desligar"]) == 0
-    assert not robo.Estado.carregar().ligado
+    assert not robo.Estado.carregar(cli(pasta_dados)).ligado
     assert robo.main(["ligar"]) == 0
-    assert robo.Estado.carregar().ligado
+    assert robo.Estado.carregar(cli(pasta_dados)).ligado
     robo.main(["status"])
     assert "Ligado" in capsys.readouterr().out
 
@@ -188,18 +190,16 @@ def test_comandos_ligar_desligar(pasta_dados, capsys):
 # ---------------------------------------------------------------- afiliado
 
 
-def test_etiqueta_de_afiliado_substitui_o_link_da_lista(pasta_dados, monkeypatch):
-    monkeypatch.setenv("AMAZON_TAG", "bru2001-20")
+def test_etiqueta_de_afiliado_substitui_o_link_da_lista(pasta_dados):
     escrever_lista(pasta_dados, "https://amzn.to/linkdeoutro | 10,00")
-    _, produto = robo.ler_lista()[0]
+    _, produto = robo.ler_lista(cli(pasta_dados, etiqueta="bru2001-20"))[0]
     assert produto.ofertas[0].link is None  # o pipeline monta com a etiqueta
     assert produto.link_amazon == "https://amzn.to/linkdeoutro"  # foto continua vindo daqui
 
 
-def test_sem_etiqueta_mantem_o_link_da_lista(pasta_dados, monkeypatch):
-    monkeypatch.delenv("AMAZON_TAG", raising=False)
+def test_sem_etiqueta_mantem_o_link_da_lista(pasta_dados):
     escrever_lista(pasta_dados, LINHA_A)
-    assert robo.ler_lista()[0][1].ofertas[0].link == LINHA_A.split(" |")[0]
+    assert robo.ler_lista(cli(pasta_dados))[0][1].ofertas[0].link == LINHA_A.split(" |")[0]
 
 
 # ---------------------------------------------------------------- painel
@@ -217,17 +217,17 @@ def test_post_guarda_detalhes_para_o_painel(pasta_dados):
 
 def test_config_do_painel_vale_por_cima_do_env(pasta_dados):
     from datetime import datetime
-    robo.Config(minutos_entre_posts=10, hora_inicio=9, hora_fim=21).salvar()
-    config = robo.Config.carregar()
+    robo.Config(minutos_entre_posts=10, hora_inicio=9, hora_fim=21).salvar(cli(pasta_dados))
+    config = robo.Config.carregar(cli(pasta_dados))
     assert (config.minutos_entre_posts, config.hora_inicio, config.hora_fim) == (10, 9, 21)
     assert not robo.dentro_do_horario(datetime(2026, 10, 5, 8, 30), config)
 
 
 def test_config_invalida_nao_e_salva(pasta_dados):
     with pytest.raises(ValueError):
-        robo.Config(minutos_entre_posts=0).salvar()
+        robo.Config(minutos_entre_posts=0).salvar(cli(pasta_dados))
     with pytest.raises(ValueError):
-        robo.Config(hora_inicio=22, hora_fim=8).salvar()
+        robo.Config(hora_inicio=22, hora_fim=8).salvar(cli(pasta_dados))
     assert not (pasta_dados / "config.json").exists()
 
 
@@ -250,3 +250,37 @@ def test_sem_preco_na_pagina_usa_o_da_lista(pasta_dados, monkeypatch):
     whatsapp = WhatsAppFalso()
     criar_robo(pasta_dados, whatsapp, preco=(None, None)).postar_um(robo.Estado())
     assert whatsapp.posts[0][2] == TEXTO_PECA
+
+
+# ---------------------------------------------------------------- vários clientes
+
+
+def test_cada_cliente_tem_seus_arquivos(tmp_path):
+    a, b = cli(tmp_path / "a"), cli(tmp_path / "b")
+    robo.Estado(ligado=False).salvar(a)
+    robo.Estado(ligado=True).salvar(b)
+    assert not robo.Estado.carregar(a).ligado
+    assert robo.Estado.carregar(b).ligado
+
+
+def test_robo_usa_a_ponte_do_proprio_cliente(tmp_path):
+    instancia = robo.Robo(cli(tmp_path))
+    assert instancia.whatsapp._url == "http://ponte-falsa"
+    assert instancia.canal == "Canal Teste"
+
+
+def test_erro_inesperado_nao_derruba_o_laco(tmp_path, monkeypatch):
+    instancia = robo.Robo(cli(tmp_path), whatsapp=WhatsAppFalso())
+    chamadas = []
+
+    def conferir(ultimo):
+        chamadas.append(1)
+        if len(chamadas) == 1:
+            raise RuntimeError("bug")
+        raise KeyboardInterrupt  # sai do laço no teste
+
+    monkeypatch.setattr(instancia, "_conferir", conferir)
+    monkeypatch.setattr(robo.time, "sleep", lambda s: None)
+    with pytest.raises(KeyboardInterrupt):
+        instancia.rodar()
+    assert len(chamadas) == 2  # o erro da primeira não parou a segunda

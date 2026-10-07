@@ -144,7 +144,12 @@ class Pipeline:
     seria desperdício.
     """
 
-    def __init__(self, pasta_saida: Path = PASTA_SAIDA) -> None:
+    def __init__(
+        self,
+        pasta_saida: Path = PASTA_SAIDA,
+        arroba_canal: str | None = None,
+        etiqueta_afiliado: str | None = None,
+    ) -> None:
         self._pasta_saida = pasta_saida
         self._amazon = AmazonService()
         self._imagem = ImageService(pasta_saida=str(pasta_saida))
@@ -152,7 +157,9 @@ class Pipeline:
         self._mensagem = MessageService()
         # O @ do canal não é segredo, mas fica no .env para o Danilo trocar
         # sem mexer no código. Sem ele, a peça sai sem marca d'água.
-        self._composicao = CompositionService(os.getenv("CANAL_ARROBA"))
+        self._composicao = CompositionService(arroba_canal or os.getenv("CANAL_ARROBA"))
+        # Cada cliente do robô tem a sua etiqueta; sem uma, vale a do .env.
+        self._etiqueta = etiqueta_afiliado
 
     def processar(self, produto: Produto, ao_avancar: AoAvancar = _nao_avisar) -> Peca:
         """Executa o pipeline completo e devolve a peça salva em disco."""
@@ -211,4 +218,5 @@ class Pipeline:
             return oferta.link
         if oferta.loja != "amazon":
             raise PipelineError(f"Falta o link de afiliado da {LOJAS[oferta.loja]}.")
-        return self._amazon.montar_link_afiliado(asin, os.getenv("AMAZON_TAG")) or link_amazon
+        etiqueta = getattr(self, "_etiqueta", None) or os.getenv("AMAZON_TAG")
+        return self._amazon.montar_link_afiliado(asin, etiqueta) or link_amazon

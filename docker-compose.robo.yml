@@ -12,6 +12,9 @@ services:
     environment:
       PASTA_DADOS: /dados
       URL_PONTE_WHATSAPP: http://whatsapp:3000
+      # Clientes extras: o cadastro (clientes.py) escreve aqui as pontes de
+      # WhatsApp deles, e o atalho "robo" sobe esse arquivo junto com este.
+      ARQUIVO_COMPOSE_CLIENTES: /dados/docker-compose.clientes.yml
     restart: unless-stopped
     volumes:
       - ./dados:/dados
@@ -25,6 +28,7 @@ services:
     environment:
       PASTA_DADOS: /dados
       URL_PONTE_WHATSAPP: http://whatsapp:3000
+      ARQUIVO_COMPOSE_CLIENTES: /dados/docker-compose.clientes.yml
     restart: unless-stopped
     volumes:
       - ./dados:/dados

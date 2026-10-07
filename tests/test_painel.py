@@ -7,8 +7,10 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+import clientes
 import painel
 import robo
+from clientes import Cliente
 
 TOKEN = "codigo-secreto-de-teste-123"
 PIN = "DAN2026"
@@ -47,23 +49,24 @@ class WhatsAppFalso:
         }
 
 
+DONO: Cliente | None = None  # o cliente de teste da vez (para os testes lerem a pasta)
+WPP = None
+
+
+def criar_cliente(pasta, token=TOKEN, pin=PIN, id_="teste") -> Cliente:
+    return Cliente(id=id_, nome="Teste", pasta=pasta, canal="Canal Teste", etiqueta="bru2001-20",
+                   painel_token=token, painel_pin=pin, url_whatsapp="http://ponte-falsa")
+
+
 @pytest.fixture
 def cliente(tmp_path, monkeypatch):
-    for nome, arquivo in {
-        "ARQUIVO_LISTA": "lista.txt", "ARQUIVO_ESTADO": "estado.json", "ARQUIVO_CACHE": "pecas.json",
-        "ARQUIVO_HISTORICO": "postados.log", "ARQUIVO_POSTS": "postados.jsonl",
-        "ARQUIVO_CONFIG": "config.json", "ARQUIVO_POSTAR_AGORA": "postar_agora",
-    }.items():
-        monkeypatch.setattr(robo, nome, tmp_path / arquivo)
-    monkeypatch.setattr(robo, "PASTA_PECAS", tmp_path / "output")
-    monkeypatch.setattr(robo, "PASTA_DADOS", tmp_path)
+    global DONO, WPP
+    DONO, WPP = criar_cliente(tmp_path), WhatsAppFalso()
+    monkeypatch.setattr(clientes, "carregar", lambda: [DONO])
+    monkeypatch.setattr(painel, "servico_whatsapp", lambda c: WPP)
     (tmp_path / "output").mkdir()
-    monkeypatch.setenv("PAINEL_TOKEN", TOKEN)
-    monkeypatch.setenv("PAINEL_PIN", PIN)
     painel._erros_de_pin.clear()
-    monkeypatch.setenv("WHATSAPP_CANAL", "Canal Teste")
-    monkeypatch.setattr(painel, "whatsapp", WhatsAppFalso())
-    monkeypatch.setitem(painel._cache_metricas, "dados", None)
+    painel._cache_metricas.clear()
     (tmp_path / "lista.txt").write_text(LINHA + "\n", encoding="utf-8")
     cliente = TestClient(painel.app)
     assert cliente.post(url("entrar"), json={"pin": PIN}).status_code == 200
@@ -80,8 +83,8 @@ def test_link_errado_parece_que_nao_existe(cliente):
     assert cliente.post("/p/errado/api/ligar").status_code == 404
 
 
-def test_token_curto_demais_nao_abre_nada(cliente, monkeypatch):
-    monkeypatch.setenv("PAINEL_TOKEN", "curto")
+def test_token_curto_demais_nao_abre_nada(cliente, monkeypatch, tmp_path):
+    monkeypatch.setattr(clientes, "carregar", lambda: [criar_cliente(tmp_path, token="curto")])
     assert cliente.get("/p/curto/").status_code == 404
 
 
@@ -106,8 +109,8 @@ def test_pin_aceita_minusculas(cliente):
     assert cliente.get(url("api/resumo")).status_code == 200
 
 
-def test_trocar_o_pin_derruba_quem_estava_dentro(cliente, monkeypatch):
-    monkeypatch.setenv("PAINEL_PIN", "NOVO123")
+def test_trocar_o_pin_derruba_quem_estava_dentro(cliente, monkeypatch, tmp_path):
+    monkeypatch.setattr(clientes, "carregar", lambda: [criar_cliente(tmp_path, pin="NOVO123")])
     assert cliente.get(url("api/resumo")).status_code == 401
 
 
@@ -127,7 +130,7 @@ def test_ligar_e_desligar(cliente):
 def test_salvar_config_valida(cliente):
     resposta = cliente.post(url("api/config"), json={"minutos_entre_posts": 10, "hora_inicio": 9, "hora_fim": 22})
     assert resposta.status_code == 200
-    assert robo.Config.carregar().minutos_entre_posts == 10
+    assert robo.Config.carregar(DONO).minutos_entre_posts == 10
 
 
 def test_config_invalida_e_recusada(cliente):
@@ -138,7 +141,7 @@ def test_config_invalida_e_recusada(cliente):
 def test_lista_com_erro_nao_substitui_a_boa(cliente):
     resposta = cliente.post(url("api/lista"), json={"texto": "https://amzn.to/sem-preco"})
     assert resposta.status_code == 400
-    assert robo.ARQUIVO_LISTA.read_text(encoding="utf-8").strip() == LINHA
+    assert DONO.lista.read_text(encoding="utf-8").strip() == LINHA
 
 
 def test_lista_valida_e_salva(cliente):
@@ -148,11 +151,11 @@ def test_lista_valida_e_salva(cliente):
 
 def test_postar_agora_deixa_pedido_para_o_robo(cliente):
     cliente.post(url("api/postar-agora"))
-    assert robo.ARQUIVO_POSTAR_AGORA.exists()
+    assert DONO.postar_agora.exists()
 
 
 def test_metricas_cruzam_post_com_produto(cliente):
-    robo.ARQUIVO_POSTS.write_text(json.dumps({
+    DONO.posts.write_text(json.dumps({
         "quando": "2026-10-05T21:00:00-03:00", "linha": LINHA, "asin": "AAAAAAAAAA",
         "produto": "Pilha AA", "imagem": "AAAAAAAAAA_final.png", "server_id": 7,
     }) + "\n", encoding="utf-8")
@@ -167,7 +170,7 @@ def test_metricas_cruzam_post_com_produto(cliente):
 
 def test_imagem_nao_sai_da_pasta_das_pecas(cliente):
     assert cliente.get(url("imagem/..%2F.env")).status_code == 404
-    (robo.PASTA_PECAS / "X_final.png").write_bytes(b"png")
+    (DONO.pecas / "X_final.png").write_bytes(b"png")
     assert cliente.get(url("imagem/X_final.png")).status_code == 200
 
 
@@ -181,8 +184,8 @@ def test_situacao_do_whatsapp_conectado(cliente):
 
 
 def test_qr_aparece_quando_desconectado(cliente):
-    painel.whatsapp.conectado = False
-    (robo.PASTA_DADOS / "qr.png").write_bytes(b"png")
+    WPP.conectado = False
+    (DONO.qr).write_bytes(b"png")
     assert cliente.get(url("api/whatsapp")).json()["tem_qr"] is True
     assert cliente.get(url("qr.png")).content == b"png"
 
@@ -200,4 +203,25 @@ def test_codigo_por_numero(cliente):
 
 def test_trocar_numero(cliente):
     assert cliente.post(url("api/whatsapp/desconectar")).status_code == 200
-    assert painel.whatsapp.desconectou
+    assert WPP.desconectou
+
+
+# ---------------------------------------------------------------- vários clientes
+
+
+def test_cada_link_abre_o_painel_do_seu_cliente(tmp_path, monkeypatch):
+    a = criar_cliente(tmp_path / "a", token="a" * 24, pin="1111", id_="a")
+    b = criar_cliente(tmp_path / "b", token="b" * 24, pin="2222", id_="b")
+    for c in (a, b):
+        c.pecas.mkdir(parents=True)
+    monkeypatch.setattr(clientes, "carregar", lambda: [a, b])
+    monkeypatch.setattr(painel, "servico_whatsapp", lambda c: WhatsAppFalso())
+    painel._erros_de_pin.clear()
+    web = TestClient(painel.app)
+    # O PIN de um não abre o painel do outro.
+    assert web.post(f"/p/{'a' * 24}/entrar", json={"pin": "2222"}).status_code == 403
+    assert web.post(f"/p/{'a' * 24}/entrar", json={"pin": "1111"}).status_code == 200
+    web.post(f"/p/{'a' * 24}/api/desligar")
+    assert not robo.Estado.carregar(a).ligado
+    assert robo.Estado.carregar(b).ligado  # o outro cliente não mudou
+    assert web.get(f"/p/{'b' * 24}/api/resumo").status_code == 401  # o crachá de A não serve em B
